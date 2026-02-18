@@ -4,18 +4,20 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsTo; // Import this!
 
-class ProductionLog extends Model
+class Sale extends Model
 {
     use HasFactory;
 
     protected $fillable = [
         'incubator_id',
-        'quantity_produced',
-        'production_date',
+        'quantity_sold',
+        'total_price',
+        'sold_at',
     ];
 
+    // ADD THIS METHOD
     public function incubator(): BelongsTo
     {
         return $this->belongsTo(Incubator::class);
