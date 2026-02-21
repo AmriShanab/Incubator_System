@@ -11,7 +11,7 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('Invoices', function (Blueprint $table) {
+        Schema::table('invoices', function (Blueprint $table) {
             $table->string('payment_method')->default('cash')->after('total_amount');
         });
     }
@@ -21,7 +21,7 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('Invoices', function (Blueprint $table) {
+        Schema::table('invoices', function (Blueprint $table) {
             $table->dropColumn('payment_method');
         });
     }
