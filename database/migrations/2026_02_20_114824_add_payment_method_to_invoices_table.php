@@ -11,12 +11,8 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('production_logs', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('incubator_id')->constrained();
-            $table->integer('quantity_produced');
-            $table->date('production_date');
-        $table->timestamps();
+        Schema::table('Invoices', function (Blueprint $table) {
+            $table->string('payment_method')->default('cash')->after('total_amount');
         });
     }
 
@@ -25,6 +21,8 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('production_logs');
+        Schema::table('Invoices', function (Blueprint $table) {
+            $table->dropColumn('payment_method');
+        });
     }
 };

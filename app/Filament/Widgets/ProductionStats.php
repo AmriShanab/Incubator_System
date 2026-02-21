@@ -2,6 +2,7 @@
 
 namespace App\Filament\Widgets;
 
+use App\Models\Incubator;
 use App\Models\Invoice;
 use App\Models\PurchaseOrder;
 use Filament\Widgets\StatsOverviewWidget as BaseWidget;
@@ -10,35 +11,24 @@ use Illuminate\Support\Number;
 
 class ProductionStats extends BaseWidget
 {
-    protected static ?int $sort = 1; // Put this at the very top
+    protected static ?string $pollingInterval = '15s';
 
     protected function getStats(): array
     {
-        // 1. Total Income (Delivered Invoices)
-        $income = Invoice::where('status', '!=', 'cancelled')->sum('total_amount');
+        $incubators = Incubator::all();
+        $stats = [];
 
-        // 2. Total Expenses (Received Purchase Orders)
-        $expense = PurchaseOrder::where('status', 'received')->sum('total_amount');
+        foreach($incubators as $incubator){
+            $stock = $incubator->current_stock ?? 0;
+            
+            $stats[] = Stat::make($incubator->name . '(In Stock)', $stock)
+            ->description($stock <= 5 ? 'Low Stock Warning' : 'Stock Level Good')
+            ->descriptionIcon($stock <= 5 ? 'heroicon-m-exclamation-triangle' : 'heroicon-m-check-badge')
+            ->color($stock <= 5 ? 'danger' : 'success');        
+        }
 
-        // 3. Net Profit (Cash Flow)
-        $profit = $income - $expense;
-
-        return [
-            Stat::make('Total Revenue', Number::currency($income, 'LKR'))
-                ->description('All time sales')
-                ->descriptionIcon('heroicon-m-banknotes')
-                ->chart([7, 2, 10, 3, 15, 4, 17]) // Dummy trend for visual appeal
-                ->color('success'),
-
-            Stat::make('Total Expenses', Number::currency($expense, 'LKR'))
-                ->description('Material Purchases')
-                ->descriptionIcon('heroicon-m-shopping-bag')
-                ->color('danger'),
-
-            Stat::make('Net Cash Flow', Number::currency($profit, 'LKR'))
-                ->description('Revenue - Expenses')
-                ->descriptionIcon('heroicon-m-arrow-trending-up')
-                ->color($profit >= 0 ? 'success' : 'danger'),
-        ];
+        return $stats;
     }
+
+    
 }

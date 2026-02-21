@@ -51,6 +51,14 @@ class InvoiceResource extends Resource
                         ])
                         ->default('draft')
                         ->required(),
+
+                    Forms\Components\Select::make('payment_method')
+                        ->options([
+                            'cash' => 'Cash',
+                            'bank_transfer' => 'Bank Transfer'
+                        ])
+                        ->default('cash')
+                        ->required(),
                 ])->columns(3),
 
 
@@ -158,6 +166,14 @@ class InvoiceResource extends Resource
                     ->sortable()
                     ->summarize(Tables\Columns\Summarizers\Sum::make()->money('LKR')),
 
+                Tables\Columns\TextColumn::make('payment_method')
+                    ->badge()
+                    ->color(fn(string $state): string => match ($state) {
+                        'cash' => 'success',
+                        'bank_transfer' => 'info',
+                    })
+                    ->formatStateUsing(fn(string $state): string => ucwords(str_replace('_', ' ', $state)))
+                    ->sortable(),
                 // 5. Date
                 Tables\Columns\TextColumn::make('invoice_date')
                     ->date()

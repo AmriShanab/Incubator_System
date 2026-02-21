@@ -19,6 +19,7 @@
             <h1>INVOICE</h1>
             <p><strong>Date:</strong> {{ $invoice->invoice_date }}</p>
             <p><strong>Status:</strong> {{ ucfirst(str_replace('_', ' ', $invoice->status)) }}</p>
+            <p><strong>Payment Method:</strong> {{ ucwords(str_replace('_', ' ', $invoice->payment_method)) }}</p>
         </div>
         <div style="text-align: right;">
             <h3>Incubator Co.</h3> <p>123 Factory Road, Sri Lanka</p>
