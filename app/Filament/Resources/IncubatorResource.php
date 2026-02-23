@@ -21,6 +21,8 @@ class IncubatorResource extends Resource
 
     protected static ?string $navigationGroup = 'Inventory';
 
+    protected static ?string $navigationLabel = 'Products';
+
 
     public static function form(Form $form): Form
     {

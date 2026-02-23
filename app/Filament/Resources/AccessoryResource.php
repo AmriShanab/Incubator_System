@@ -16,7 +16,7 @@ class AccessoryResource extends Resource
 
     protected static ?string $navigationIcon = 'heroicon-o-tag'; // Tag icon for products
     
-    protected static ?string $navigationLabel = 'Accessories / Parts';
+    protected static ?string $navigationLabel = 'Supplies';
     
     protected static ?string $navigationGroup = 'Inventory';
 
