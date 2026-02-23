@@ -27,110 +27,142 @@ class InvoiceResource extends Resource
     {
         return $form
             ->schema([
-                // Section 1: Header
-                Forms\Components\Section::make('Invoice Details')->schema([
-                    Forms\Components\Select::make('customer_id')
-                        ->relationship('customer', 'name')
-                        ->searchable()
-                        ->required()
-                        ->createOptionForm([
-                            Forms\Components\TextInput::make('name')->required(),
-                            Forms\Components\TextInput::make('phone'),
-                        ]), // "Out of Box": Create customer directly from Invoice!
-
-                    Forms\Components\DatePicker::make('invoice_date')
-                        ->default(now())
-                        ->required(),
-
-                    Forms\Components\Select::make('status')
-                        ->options([
-                            'draft' => 'Draft',
-                            'processing' => 'Processing',
-                            'out_for_delivery' => 'Out for Delivery',
-                            'delivered' => 'Delivered',
-                        ])
-                        ->default('draft')
-                        ->required(),
-
-                    Forms\Components\Select::make('payment_method')
-                        ->options([
-                            'cash' => 'Cash',
-                            'bank_transfer' => 'Bank Transfer'
-                        ])
-                        ->default('cash')
-                        ->required(),
-                ])->columns(3),
-
-
-                Forms\Components\Repeater::make('items')
-                    ->relationship()
+                Forms\Components\Group::make()
                     ->schema([
-                        Forms\Components\MorphToSelect::make('sellable')
-                            ->label('Item Type')
-                            ->types([
-                                Forms\Components\MorphToSelect\Type::make(\App\Models\Incubator::class)
-                                    ->titleAttribute('name')
-                                    ->label('Incubator'),
-                                Forms\Components\MorphToSelect\Type::make(\App\Models\Accessory::class)
-                                    ->titleAttribute('name')
-                                    ->label('Accessory / Part'),
+                        // Main Item Section
+                        Forms\Components\Section::make('Invoice Items')
+                            ->headerActions([
+                                Forms\Components\Actions\Action::make('reset')
+                                    ->modalHeading('Are you sure?')
+                                    ->action(fn(Forms\Set $set) => $set('items', [])),
                             ])
-                            ->searchable()
-                            ->required()
-                            ->reactive() // Make it listen to changes
-                            ->afterStateUpdated(function ($state, Forms\Set $set) {
-                                // "Out of Box": Auto-fill price when product is selected
-                                if ($state['sellable_type'] && $state['sellable_id']) {
-                                    $modelClass = $state['sellable_type'];
-                                    $record = $modelClass::find($state['sellable_id']);
-                                    if ($record) {
-                                        // Assuming both models have 'selling_price' or 'price'
-                                        // You might need to adjust Incubator model to have 'price'
-                                        $price = $record->selling_price ?? $record->price ?? 0;
-                                        $set('unit_price', $price);
-                                    }
-                                }
-                            }),
+                            ->schema([
+                                Forms\Components\Repeater::make('items')
+                                    ->relationship()
+                                    ->schema([
+                                        Forms\Components\MorphToSelect::make('sellable')
+                                            ->label('Item')
+                                            ->types([
+                                                Forms\Components\MorphToSelect\Type::make(\App\Models\Incubator::class)
+                                                    ->titleAttribute('name')
+                                                    ->label('Product'),
+                                                Forms\Components\MorphToSelect\Type::make(\App\Models\Accessory::class)
+                                                    ->titleAttribute('name')
+                                                    ->label('Inventory Item'),
+                                            ])
+                                            ->searchable()
+                                            ->preload()
+                                            ->required()
+                                            ->columnSpan(2)
+                                            ->reactive()
+                                            ->afterStateUpdated(function ($state, Forms\Set $set) {
+                                                if ($state['sellable_type'] && $state['sellable_id']) {
+                                                    $modelClass = $state['sellable_type'];
+                                                    $record = $modelClass::find($state['sellable_id']);
+                                                    if ($record) {
+                                                        $price = $record->selling_price ?? $record->price ?? 0;
+                                                        $set('unit_price', $price);
+                                                        // Trigger total update
+                                                        $set('row_total', $price * 1);
+                                                    }
+                                                }
+                                            }),
 
-                        Forms\Components\TextInput::make('quantity')
-                            ->numeric()
-                            ->default(1)
-                            ->required()
-                            ->reactive()
-                            ->afterStateUpdated(
-                                fn($state, Forms\Get $get, Forms\Set $set) =>
-                                $set('row_total', $state * $get('unit_price'))
-                            ),
+                                        Forms\Components\TextInput::make('unit_price')
+                                            ->label('Unit Price')
+                                            ->numeric()
+                                            ->prefix('LKR')
+                                            ->required()
+                                            ->columnSpan(1)
+                                            ->reactive()
+                                            ->afterStateUpdated(fn($state, Forms\Get $get, Forms\Set $set) =>
+                                            $set('row_total', (float)$state * (int)$get('quantity'))),
 
-                        Forms\Components\TextInput::make('unit_price')
-                            ->numeric()
-                            ->required()
-                            ->reactive()
-                            ->afterStateUpdated(
-                                fn($state, Forms\Get $get, Forms\Set $set) =>
-                                $set('row_total', $state * $get('quantity'))
-                            ),
+                                        Forms\Components\TextInput::make('quantity')
+                                            ->numeric()
+                                            ->default(1)
+                                            ->minValue(1)
+                                            ->required()
+                                            ->columnSpan(1)
+                                            ->reactive()
+                                            ->afterStateUpdated(fn($state, Forms\Get $get, Forms\Set $set) =>
+                                            $set('row_total', (int)$state * (float)$get('unit_price'))),
 
-                        Forms\Components\TextInput::make('row_total')
-                            ->numeric()
-                            ->disabled()
-                            ->dehydrated() // Ensure it saves to DB
+                                        Forms\Components\TextInput::make('row_total')
+                                            ->label('Subtotal')
+                                            ->numeric()
+                                            ->prefix('LKR')
+                                            ->disabled()
+                                            ->dehydrated()
+                                            ->columnSpan(1),
+                                    ])
+                                    ->columns(5) // Aligns everything in one neat row
+                                    ->defaultItems(1)
+                                    ->reorderable(true)
+                                    ->live()
+                                    ->afterStateUpdated(function (Forms\Get $get, Forms\Set $set) {
+                                        $items = $get('items');
+                                        $total = collect($items)->sum(fn($item) => (float)($item['row_total'] ?? 0));
+                                        $set('total_amount', $total);
+                                    }),
+                            ]),
                     ])
-                    ->columns(4)
-                    // "Out of Box": Auto calculate Grand Total
-                    ->live()
-                    ->afterStateUpdated(function (Forms\Get $get, Forms\Set $set) {
-                        $items = $get('items');
-                        $total = collect($items)->sum(fn($item) => $item['row_total'] ?? 0);
-                        $set('total_amount', $total);
-                    }),
+                    ->columnSpan(['lg' => 2]),
 
-                Forms\Components\TextInput::make('total_amount')
-                    ->prefix('LKR')
-                    ->disabled()
-                    ->dehydrated()
-                    ->numeric(),
-            ]);
+                Forms\Components\Group::make()
+                    ->schema([
+                        // Customer & Meta Section
+                        Forms\Components\Section::make('Summary')
+                            ->schema([
+                                Forms\Components\Select::make('customer_id')
+                                    ->relationship('customer', 'name')
+                                    ->searchable()
+                                    ->required()
+                                    ->createOptionForm([
+                                        Forms\Components\TextInput::make('name')->required(),
+                                        Forms\Components\TextInput::make('phone'),
+                                    ]),
+
+                                Forms\Components\DatePicker::make('invoice_date')
+                                    ->default(now())
+                                    ->required(),
+
+                                Forms\Components\Select::make('status')
+                                    ->options([
+                                        'draft' => 'Draft',
+                                        'processing' => 'Processing',
+                                        'out_for_delivery' => 'Out for Delivery',
+                                        'delivered' => 'Delivered',
+                                    ])
+                                    ->default('draft')
+                                    ->required()
+                                    ->native(false),
+
+                                Forms\Components\Select::make('payment_method')
+                                    ->options([
+                                        'cash' => 'Cash',
+                                        'bank_transfer' => 'Bank Transfer'
+                                    ])
+                                    ->default('cash')
+                                    ->required()
+                                    ->native(false),
+                            ]),
+
+                        // Total Card
+                        Forms\Components\Section::make()
+                            ->schema([
+                                Forms\Components\Placeholder::make('total_display')
+                                    ->label('Grand Total')
+                                    ->content(fn(Forms\Get $get) => 'LKR ' . number_format($get('total_amount') ?? 0, 2)),
+
+                                Forms\Components\Hidden::make('total_amount')
+                                    ->default(0),
+                            ])
+                            ->extraAttributes(['class' => 'bg-primary-50 dark:bg-primary-900/10 border-primary-200']),
+                    ])
+                    ->columnSpan(['lg' => 1]),
+            ])
+            ->columns(3); // This creates the 2:1 ratio (Main Content : Sidebar)
     }
 
     public static function table(Table $table): Table
