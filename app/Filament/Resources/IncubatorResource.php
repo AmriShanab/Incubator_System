@@ -28,15 +28,26 @@ class IncubatorResource extends Resource
     {
         return $form
             ->schema([
-                Forms\Components\TextInput::make('name')
-                    ->required()
-                    ->maxLength(255),
-                Forms\Components\TextInput::make('sku')
-                    ->label('SKU (Stock Keeping Unit)')
-                    ->unique(ignoreRecord: true),
+                Forms\Components\Section::make('Product Details')
+                    ->description('Manage the basic information and pricing for this product.')
+                    ->schema([
+                        Forms\Components\TextInput::make('name')
+                            ->required()
+                            ->maxLength(255),
+
+                        Forms\Components\TextInput::make('sku')
+                            ->label('SKU (Stock Keeping Unit)')
+                            ->unique(ignoreRecord: true),
+
+                        Forms\Components\TextInput::make('price')
+                            ->label('Selling Price')
+                            ->numeric()
+                            ->prefix('LKR')
+                            ->required()
+                            ->placeholder('0.00'),
+                    ])->columns(2),
             ]);
     }
-
     public static function table(Table $table): Table
     {
         return $table
@@ -44,7 +55,14 @@ class IncubatorResource extends Resource
                 Tables\Columns\TextColumn::make('name')
                     ->searchable()
                     ->sortable(),
-                Tables\Columns\TextColumn::make('sku'),
+
+                Tables\Columns\TextColumn::make('sku')
+                    ->label('SKU'),
+
+                Tables\Columns\TextColumn::make('price')
+                    ->label('Price')
+                    ->money('LKR') 
+                    ->sortable(),
             ]);
     }
 

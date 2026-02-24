@@ -67,7 +67,6 @@ class ProductionPlanner extends Page implements HasForms
         $results = [];
         $isFeasible = true;
 
-        // FIXED: Use 'materials' instead of 'bomItems'
         foreach ($incubator->materials as $material) {
 
             // 1. Get quantity from the Pivot table (incubator_material)
