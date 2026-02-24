@@ -16,6 +16,7 @@ use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 
 class AdminPanelProvider extends PanelProvider
@@ -27,10 +28,27 @@ class AdminPanelProvider extends PanelProvider
             ->id('admin')
             ->path('admin')
             ->login()
+            ->brandLogo(asset('img/logo.png'))
+            ->brandLogoHeight('4rem') // Slightly less than the topbar height for padding
+            ->renderHook(
+            'panels::head.end',
+            fn (): string => Blade::render('<style>
+                .fi-topbar {
+                    height: 5rem !important; /* Increase from default ~4rem */
+                }
+                .fi-topbar nav {
+                    height: 5rem !important;
+                }
+                /* Adjust the sidebar header height to match if needed */
+                .fi-sidebar-header {
+                    height: 5rem !important;
+                }
+            </style>'),
+        )
             
             // --- ENABLE DARK MODE TOGGLE ---
             ->darkMode(true) 
-            
+            ->darkModeBrandLogo(asset('img/logo-white-removebg-preview.png'))
             // Brand
             ->brandName('SN Incubators')
             ->colors([
