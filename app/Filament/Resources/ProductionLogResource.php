@@ -3,15 +3,14 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\ProductionLogResource\Pages;
-use App\Filament\Resources\ProductionLogResource\RelationManagers;
 use App\Models\ProductionLog;
+use App\Models\Incubator;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
+use Filament\Notifications\Notification;
 
 class ProductionLogResource extends Resource
 {
@@ -19,25 +18,67 @@ class ProductionLogResource extends Resource
 
     protected static ?string $navigationIcon = 'heroicon-o-clipboard-document-list';
 
-      protected static ?string $navigationGroup = 'Inventory';
+    protected static ?string $navigationGroup = 'Inventory';
 
     public static function form(Form $form): Form
     {
         return $form
             ->schema([
-                Forms\Components\Select::make('incubator_id')
-                    ->relationship('incubator', 'name')
-                    ->required()
-                    ->searchable()
-                    ->preload(),
-                Forms\Components\TextInput::make('quantity_produced')
-                    ->required()
-                    ->numeric()
-                    ->minValue(1)
-                    ->label('Quantity Built'),
-                Forms\Components\DatePicker::make('production_date')
-                    ->required()
-                    ->default(now()),
+                Forms\Components\Section::make('Production Details')
+                    ->schema([
+                        Forms\Components\Select::make('incubator_id')
+                            ->relationship('incubator', 'name')
+                            ->required()
+                            ->searchable()
+                            ->preload()
+                            ->live() // Essential to track stock for the selected product
+                            ->afterStateUpdated(fn (Forms\Set $set) => $set('quantity_produced', null)),
+
+                        Forms\Components\TextInput::make('quantity_produced')
+                            ->label('Quantity Built')
+                            ->required()
+                            ->numeric()
+                            ->minValue(1)
+                            ->live(onBlur: true)
+                            // 1. Reactive Warning for the UI
+                            ->afterStateUpdated(function ($state, Forms\Get $get) {
+                                $incubatorId = $get('incubator_id');
+                                if (!$incubatorId || !$state) return;
+
+                                $incubator = Incubator::find($incubatorId);
+                                
+                                foreach ($incubator->materials as $material) {
+                                    $needed = $material->pivot->quantity * $state;
+                                    if ($material->stock < $needed) {
+                                        Notification::make()
+                                            ->title('Stock Shortage Detected')
+                                            ->body("Insufficient {$material->name}. You need {$needed} but only have {$material->stock} in stock.")
+                                            ->danger()
+                                            ->send();
+                                    }
+                                }
+                            })
+                            // 2. Hard Stop Validation (Prevents Saving)
+                            ->rules([
+                                fn (Forms\Get $get): \Closure => function (string $attribute, $value, \Closure $fail) use ($get) {
+                                    $incubatorId = $get('incubator_id');
+                                    if (!$incubatorId) return;
+
+                                    $incubator = Incubator::with('materials')->find($incubatorId);
+                                    
+                                    foreach ($incubator->materials as $material) {
+                                        $totalNeeded = $material->pivot->quantity * $value;
+                                        if ($material->stock < $totalNeeded) {
+                                            $fail("Insufficient {$material->name} in stock. Required: {$totalNeeded}, Available: {$material->stock}.");
+                                        }
+                                    }
+                                },
+                            ]),
+
+                        Forms\Components\DatePicker::make('production_date')
+                            ->required()
+                            ->default(now()),
+                    ])->columns(2),
             ]);
     }
 
@@ -47,7 +88,8 @@ class ProductionLogResource extends Resource
             ->columns([
                 Tables\Columns\TextColumn::make('incubator.name')
                     ->label('Product')
-                    ->sortable(),
+                    ->sortable()
+                    ->searchable(),
                 Tables\Columns\TextColumn::make('quantity_produced')
                     ->label('Qty Built')
                     ->sortable(),
@@ -55,16 +97,11 @@ class ProductionLogResource extends Resource
                     ->date()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('created_at')
-                    ->dateTime(),
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->defaultSort('created_at', 'desc');
-    }
-
-    public static function getRelations(): array
-    {
-        return [
-            //
-        ];
     }
 
     public static function getPages(): array
