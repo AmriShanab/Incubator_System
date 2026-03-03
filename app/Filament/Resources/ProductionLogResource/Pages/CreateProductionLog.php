@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\ProductionLogResource\Pages;
 
 use App\Filament\Resources\ProductionLogResource;
+use App\Models\Incubator;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\CreateRecord;
@@ -12,27 +13,55 @@ class CreateProductionLog extends CreateRecord
 {
     protected static string $resource = ProductionLogResource::class;
 
+    // FIXED: Spelled "beforeCreate" correctly so Filament actually runs it
+    protected function beforeCreate(): void
+    {
+        $incubatorId = $this->data['incubator_id'];
+        $quantityProduced = $this->data['quantity_produced'];
+
+        $incubator = Incubator::with('materials')->find($incubatorId);
+
+        if(!$incubator || $incubator->materials->isEmpty()){
+            Notification::make()
+            ->danger()
+            ->title('Missing Bill Of Materials')
+            ->body("This Incubator doesn't have any materials assigned to it. Please add parts to it first.")
+            ->send();
+
+            $this->halt();
+        }
+
+        foreach ($incubator->materials as $key => $material) {
+            // FIXED: Using 'quantity_required' to match your afterCreate logic
+            $needed = $material->pivot->quantity_required * $quantityProduced;
+
+            // FIXED: Using 'current_stock' to match your Material database column
+            if ($material->current_stock < $needed) {
+                Notification::make()
+                    ->danger()
+                    ->title('Stock Shortage: ' . $material->name)
+                    ->body("You need {$needed} but only have {$material->current_stock} in stock. Production blocked.")
+                    ->persistent() 
+                    ->send();
+                
+                $this->halt(); // STOPS THE CREATION
+            }
+        }
+    }
+
     protected function afterCreate(): void
     {
-        // 1. Get the Log we just created
         $log = $this->record;
-        
-        // 2. Get the Incubator and its Recipe (Materials)
         $incubator = $log->incubator; 
         
-        // We need to load the materials relationship if it's not already loaded
         $incubator->load('materials');
 
         $qtyBuilt = $log->quantity_produced;
         $deductedMaterials = [];
 
-        // 3. Start a Database Transaction (Safety first!)
         DB::transaction(function () use ($incubator, $qtyBuilt, &$deductedMaterials) {
             foreach ($incubator->materials as $material) {
-                // How much do we need per unit? (from the pivot table)
                 $requiredPerUnit = $material->pivot->quantity_required;
-                
-                // Total to deduct
                 $totalToDeduct = $requiredPerUnit * $qtyBuilt;
                 
                 // Perform the deduction
@@ -40,6 +69,7 @@ class CreateProductionLog extends CreateRecord
                 
                 $deductedMaterials[] = "{$material->name}: -{$totalToDeduct} {$material->unit}";
             }
+            // Assuming your Incubator model also uses 'current_stock'
             $incubator->increment('current_stock', $qtyBuilt);
         });
 

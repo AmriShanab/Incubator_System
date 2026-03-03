@@ -32,7 +32,7 @@ class ProductionLogResource extends Resource
                             ->searchable()
                             ->preload()
                             ->live() // Essential to track stock for the selected product
-                            ->afterStateUpdated(fn (Forms\Set $set) => $set('quantity_produced', null)),
+                            ->afterStateUpdated(fn(Forms\Set $set) => $set('quantity_produced', null)),
 
                         Forms\Components\TextInput::make('quantity_produced')
                             ->label('Quantity Built')
@@ -46,13 +46,16 @@ class ProductionLogResource extends Resource
                                 if (!$incubatorId || !$state) return;
 
                                 $incubator = Incubator::find($incubatorId);
-                                
+
                                 foreach ($incubator->materials as $material) {
-                                    $needed = $material->pivot->quantity * $state;
-                                    if ($material->stock < $needed) {
+                                    // FIXED: pivot->quantity_required
+                                    $needed = $material->pivot->quantity_required * $state;
+
+                                    // FIXED: current_stock
+                                    if ($material->current_stock < $needed) {
                                         Notification::make()
                                             ->title('Stock Shortage Detected')
-                                            ->body("Insufficient {$material->name}. You need {$needed} but only have {$material->stock} in stock.")
+                                            ->body("Insufficient {$material->name}. You need {$needed} but only have {$material->current_stock} in stock.")
                                             ->danger()
                                             ->send();
                                     }
@@ -60,16 +63,19 @@ class ProductionLogResource extends Resource
                             })
                             // 2. Hard Stop Validation (Prevents Saving)
                             ->rules([
-                                fn (Forms\Get $get): \Closure => function (string $attribute, $value, \Closure $fail) use ($get) {
+                                fn(Forms\Get $get): \Closure => function (string $attribute, $value, \Closure $fail) use ($get) {
                                     $incubatorId = $get('incubator_id');
                                     if (!$incubatorId) return;
 
                                     $incubator = Incubator::with('materials')->find($incubatorId);
-                                    
+
                                     foreach ($incubator->materials as $material) {
-                                        $totalNeeded = $material->pivot->quantity * $value;
-                                        if ($material->stock < $totalNeeded) {
-                                            $fail("Insufficient {$material->name} in stock. Required: {$totalNeeded}, Available: {$material->stock}.");
+                                        // FIXED: pivot->quantity_required
+                                        $totalNeeded = $material->pivot->quantity_required * $value;
+
+                                        // FIXED: current_stock
+                                        if ($material->current_stock < $totalNeeded) {
+                                            $fail("Insufficient {$material->name} in stock. Required: {$totalNeeded}, Available: {$material->current_stock}.");
                                         }
                                     }
                                 },
