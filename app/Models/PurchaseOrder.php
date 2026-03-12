@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
 
 class PurchaseOrder extends Model
 {
@@ -21,4 +22,37 @@ class PurchaseOrder extends Model
     {
         return $this->belongsTo(Supplier::class);
     }
+
+    public function account()
+    {
+        return $this->belongsTo(Account::class);
+    }
+
+    public function transactions()
+    {
+        return $this->morphMany(Transaction::class, 'reference');
+    }
+
+    protected static function booted()
+    {
+        static::updated(function ($po) {
+            if($po->isDirty('status') && $po->status === 'received') {
+                if($po->account_id && $po->total_amount > 0 && !$po->transactions()->exists()) {
+                    DB::transaction(function () use ($po) {
+                        $po->transactions()->create([
+                            'account_id' => $po->account_id,
+                            'type' => 'out',
+                            'amount' => $po->total_amount,
+                            'description' => "Payment sent for Purchase Order #{$po->id} to Supplier",
+                            'transaction_date' => now()->toDateString(),
+                        ]);
+                        $po->account->decrement('balance', $po->total_amount);
+                    });
+                }
+            }
+        });
+    }
+
+
+
 }

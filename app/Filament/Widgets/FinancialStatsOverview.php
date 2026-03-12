@@ -1,0 +1,43 @@
+<?php
+
+namespace App\Filament\Widgets;
+
+use App\Models\Transaction;
+use Filament\Widgets\StatsOverviewWidget as BaseWidget;
+use Filament\Widgets\StatsOverviewWidget\Stat;
+
+class FinancialStatsOverview extends BaseWidget
+{
+    protected int | string | array $columnSpan = 'full';
+
+    protected function getStats(): array
+    {
+        // Calculate all money IN (Invoices & Settlements)
+        $revenue = Transaction::where('type', 'in')->sum('amount');
+
+        // Calculate all money OUT (Purchases & General Expenses)
+        $expenses = Transaction::where('type', 'out')->sum('amount');
+
+        // The bottom line
+        $netProfit = $revenue - $expenses;
+
+        return [
+            Stat::make('Total Revenue', 'LKR ' . number_format($revenue, 2))
+                ->description('All incoming cash')
+                ->descriptionIcon('heroicon-m-arrow-trending-up')
+                ->color('success')
+                ->chart([7, 2, 10, 3, 15, 4, 17]), // Optional: Adds a little background sparkline
+
+            Stat::make('Total Expenses', 'LKR ' . number_format($expenses, 2))
+                ->description('Purchases, Fees, & Bills')
+                ->descriptionIcon('heroicon-m-arrow-trending-down')
+                ->color('danger')
+                ->chart([3, 12, 4, 10, 5, 14, 2]),
+
+            Stat::make('Net Profit', 'LKR ' . number_format($netProfit, 2))
+                ->description('Overall SN Tech Profit')
+                ->descriptionIcon($netProfit >= 0 ? 'heroicon-m-check-badge' : 'heroicon-m-exclamation-triangle')
+                ->color($netProfit >= 0 ? 'success' : 'danger'),
+        ];
+    }
+}

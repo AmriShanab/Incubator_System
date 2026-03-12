@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use Filament\FontProviders\GoogleFontProvider;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -31,8 +32,8 @@ class AdminPanelProvider extends PanelProvider
             ->brandLogo(asset('img/logo.png'))
             ->brandLogoHeight('4rem') // Slightly less than the topbar height for padding
             ->renderHook(
-            'panels::head.end',
-            fn (): string => Blade::render('<style>
+                'panels::head.end',
+                fn(): string => Blade::render('<style>
                 .fi-topbar {
                     height: 5rem !important; /* Increase from default ~4rem */
                 }
@@ -44,16 +45,24 @@ class AdminPanelProvider extends PanelProvider
                     height: 5rem !important;
                 }
             </style>'),
-        )
-            
+            )
+            ->font('Poppins', provider: GoogleFontProvider::class)
+
+
             // --- ENABLE DARK MODE TOGGLE ---
-            ->darkMode(true) 
+            ->darkMode(true)
             ->darkModeBrandLogo(asset('img/logo-white-removebg-preview.png'))
             // Brand
             ->brandName('SN Incubators')
             ->colors([
-                'primary' => Color::Amber,
+                'primary' => Color::Cyan, // Or whichever color matches your Rooster logo!
+                'danger' => Color::Rose,
+                'gray' => Color::Slate,
+                'info' => Color::Blue,
+                'success' => Color::Emerald,
+                'warning' => Color::Orange,
             ])
+            ->sidebarCollapsibleOnDesktop()
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')
             ->pages([

@@ -14,33 +14,51 @@ class CustomerResource extends Resource
 {
     protected static ?string $model = Customer::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-users'; // Icon for Customers
+    protected static ?string $navigationIcon = 'heroicon-o-users'; 
 
-    protected static ?string $navigationGroup = 'Sales'; // Group under "Sales"
+    protected static ?string $navigationGroup = 'Sales'; 
+    
+    // Puts it near the top of the Sales group
+    protected static ?int $navigationSort = 1; 
 
     public static function form(Form $form): Form
     {
         return $form
             ->schema([
-                Forms\Components\Section::make('Customer Details')->schema([
-                    Forms\Components\TextInput::make('name')
-                        ->required()
-                        ->maxLength(255)
-                        ->label('Customer Name')
-                        ->prefixIcon('heroicon-m-user'),
+                Forms\Components\Group::make()
+                    ->schema([
+                        Forms\Components\Section::make('Personal Information')
+                            ->description('Basic contact details for this client.')
+                            ->icon('heroicon-o-user')
+                            ->schema([
+                                Forms\Components\TextInput::make('name')
+                                    ->required()
+                                    ->maxLength(255)
+                                    ->label('Full Name')
+                                    ->prefixIcon('heroicon-m-user'),
 
-                    Forms\Components\TextInput::make('phone')
-                        ->tel()
-                        ->maxLength(20)
-                        ->label('Phone Number')
-                        ->prefixIcon('heroicon-m-phone'),
+                                Forms\Components\TextInput::make('phone')
+                                    ->tel()
+                                    ->maxLength(20)
+                                    ->label('Phone Number')
+                                    ->prefixIcon('heroicon-m-phone')
+                                    ->placeholder('+94 7X XXX XXXX'),
+                            ])->columns(2),
+                    ])->columnSpan(['lg' => 2]),
 
-                    Forms\Components\Textarea::make('address')
-                        ->rows(3)
-                        ->columnSpanFull() // Make address take full width
-                        ->label('Billing Address'),
-                ])->columns(2),
-            ]);
+                Forms\Components\Group::make()
+                    ->schema([
+                        Forms\Components\Section::make('Location Details')
+                            ->description('Shipping and billing address.')
+                            ->icon('heroicon-o-map-pin')
+                            ->schema([
+                                Forms\Components\Textarea::make('address')
+                                    ->rows(4)
+                                    ->label('Complete Address')
+                                    ->placeholder('Enter street address, city, and postal code...'),
+                            ]),
+                    ])->columnSpan(['lg' => 1]),
+            ])->columns(3);
     }
 
     public static function table(Table $table): Table
@@ -48,29 +66,47 @@ class CustomerResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('name')
-                    ->searchable() // Allows searching by name
+                    ->label('Customer Profile')
+                    ->searchable()
                     ->sortable()
-                    ->weight('bold'),
-
-                Tables\Columns\TextColumn::make('phone')
-                    ->icon('heroicon-m-phone')
-                    ->searchable(),
+                    ->weight('bold')
+                    ->icon('heroicon-m-user')
+                    // Places the phone number neatly under the name
+                    ->description(fn (Customer $record): string => $record->phone ?? 'No phone provided'),
 
                 Tables\Columns\TextColumn::make('address')
-                    ->limit(50) // Truncate long addresses
+                    ->label('Location')
+                    ->icon('heroicon-m-map-pin')
+                    ->limit(40)
+                    ->searchable()
                     ->tooltip(function (Tables\Columns\TextColumn $column): ?string {
                         return $column->getState();
                     }),
 
+                // Premium Feature: Show total orders to spot VIP customers
+                Tables\Columns\TextColumn::make('invoices_count')
+                    ->counts('invoices')
+                    ->label('Total Orders')
+                    ->badge()
+                    ->color('primary')
+                    ->sortable(),
+
                 Tables\Columns\TextColumn::make('created_at')
-                    ->dateTime()
+                    ->label('Registered On')
+                    ->dateTime('M d, Y')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->defaultSort('created_at', 'desc')
             ->actions([
                 Tables\Actions\EditAction::make(),
-                Tables\Actions\DeleteAction::make(),
+                // Useful quick-action to call them directly from mobile
+                Tables\Actions\Action::make('call')
+                    ->label('Call')
+                    ->icon('heroicon-m-phone')
+                    ->color('success')
+                    ->url(fn (Customer $record) => "tel:{$record->phone}")
+                    ->visible(fn (Customer $record) => filled($record->phone)),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

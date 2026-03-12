@@ -3,17 +3,12 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\InvoiceResource\Pages;
-use App\Filament\Resources\InvoiceResource\RelationManagers;
 use App\Models\Invoice;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
-
-use function Illuminate\Support\now;
 
 class InvoiceResource extends Resource
 {
@@ -29,11 +24,12 @@ class InvoiceResource extends Resource
             ->schema([
                 Forms\Components\Group::make()
                     ->schema([
-                        // Main Item Section
                         Forms\Components\Section::make('Invoice Items')
+                            ->icon('heroicon-o-shopping-cart')
                             ->headerActions([
                                 Forms\Components\Actions\Action::make('reset')
-                                    ->modalHeading('Are you sure?')
+                                    ->modalHeading('Clear all items?')
+                                    ->color('danger')
                                     ->action(fn(Forms\Set $set) => $set('items', [])),
                             ])
                             ->schema([
@@ -41,14 +37,10 @@ class InvoiceResource extends Resource
                                     ->relationship()
                                     ->schema([
                                         Forms\Components\MorphToSelect::make('sellable')
-                                            ->label('Item')
+                                            ->label('Product / Supply')
                                             ->types([
-                                                Forms\Components\MorphToSelect\Type::make(\App\Models\Incubator::class)
-                                                    ->titleAttribute('name')
-                                                    ->label('Product'),
-                                                Forms\Components\MorphToSelect\Type::make(\App\Models\Accessory::class)
-                                                    ->titleAttribute('name')
-                                                    ->label('Inventory Item'),
+                                                Forms\Components\MorphToSelect\Type::make(\App\Models\Incubator::class)->titleAttribute('name')->label('Incubator'),
+                                                Forms\Components\MorphToSelect\Type::make(\App\Models\Accessory::class)->titleAttribute('name')->label('Accessory'),
                                             ])
                                             ->searchable()
                                             ->preload()
@@ -62,7 +54,6 @@ class InvoiceResource extends Resource
                                                     if ($record) {
                                                         $price = $record->selling_price ?? $record->price ?? 0;
                                                         $set('unit_price', $price);
-                                                        // Trigger total update
                                                         $set('row_total', $price * 1);
                                                     }
                                                 }
@@ -75,8 +66,7 @@ class InvoiceResource extends Resource
                                             ->required()
                                             ->columnSpan(1)
                                             ->reactive()
-                                            ->afterStateUpdated(fn($state, Forms\Get $get, Forms\Set $set) =>
-                                            $set('row_total', (float)$state * (int)$get('quantity'))),
+                                            ->afterStateUpdated(fn($state, Forms\Get $get, Forms\Set $set) => $set('row_total', (float)$state * (int)$get('quantity'))),
 
                                         Forms\Components\TextInput::make('quantity')
                                             ->numeric()
@@ -85,8 +75,7 @@ class InvoiceResource extends Resource
                                             ->required()
                                             ->columnSpan(1)
                                             ->reactive()
-                                            ->afterStateUpdated(fn($state, Forms\Get $get, Forms\Set $set) =>
-                                            $set('row_total', (int)$state * (float)$get('unit_price'))),
+                                            ->afterStateUpdated(fn($state, Forms\Get $get, Forms\Set $set) => $set('row_total', (int)$state * (float)$get('unit_price'))),
 
                                         Forms\Components\TextInput::make('row_total')
                                             ->label('Subtotal')
@@ -96,7 +85,7 @@ class InvoiceResource extends Resource
                                             ->dehydrated()
                                             ->columnSpan(1),
                                     ])
-                                    ->columns(5) // Aligns everything in one neat row
+                                    ->columns(5)
                                     ->defaultItems(1)
                                     ->reorderable(true)
                                     ->live()
@@ -106,21 +95,21 @@ class InvoiceResource extends Resource
                                         $set('total_amount', $total);
                                     }),
                             ]),
-                    ])
-                    ->columnSpan(['lg' => 2]),
+                    ])->columnSpan(['lg' => 2]),
 
                 Forms\Components\Group::make()
                     ->schema([
-                        // Customer & Meta Section
-                        Forms\Components\Section::make('Summary')
+                        Forms\Components\Section::make('Client & Logistics')
+                            ->icon('heroicon-o-user')
                             ->schema([
                                 Forms\Components\Select::make('customer_id')
                                     ->relationship('customer', 'name')
+                                    ->label('Customer')
                                     ->searchable()
                                     ->required()
                                     ->createOptionForm([
                                         Forms\Components\TextInput::make('name')->required(),
-                                        Forms\Components\TextInput::make('phone'),
+                                        Forms\Components\TextInput::make('phone')->tel(),
                                     ]),
 
                                 Forms\Components\DatePicker::make('invoice_date')
@@ -137,51 +126,58 @@ class InvoiceResource extends Resource
                                     ->default('draft')
                                     ->required()
                                     ->native(false),
+                            ]),
 
+                        Forms\Components\Section::make('Payment Info')
+                            ->icon('heroicon-o-credit-card')
+                            ->schema([
                                 Forms\Components\Select::make('payment_method')
                                     ->options([
                                         'cash' => 'Cash',
-                                        'bank_transfer' => 'Bank Transfer'
+                                        'bank_transfer' => 'Bank Transfer',
                                     ])
                                     ->default('cash')
                                     ->required()
                                     ->native(false),
-                            ]),
 
-                        // Total Card
-                        Forms\Components\Section::make()
-                            ->schema([
+                                Forms\Components\Select::make('account_id')
+                                    ->relationship('account', 'name')
+                                    ->label('Deposit To')
+                                    ->required()
+                                    ->preload()
+                                    ->searchable()
+                                    ->native(false),
+
                                 Forms\Components\Placeholder::make('total_display')
                                     ->label('Grand Total')
-                                    ->content(fn(Forms\Get $get) => 'LKR ' . number_format($get('total_amount') ?? 0, 2)),
+                                    ->content(fn(Forms\Get $get) => 'LKR ' . number_format($get('total_amount') ?? 0, 2))
+                                    ->extraAttributes(['class' => 'text-2xl font-bold text-success-600']),
 
-                                Forms\Components\Hidden::make('total_amount')
-                                    ->default(0),
-                            ])
-                            ->extraAttributes(['class' => 'bg-primary-50 dark:bg-primary-900/10 border-primary-200']),
-                    ])
-                    ->columnSpan(['lg' => 1]),
-            ])
-            ->columns(3); // This creates the 2:1 ratio (Main Content : Sidebar)
+                                Forms\Components\Hidden::make('total_amount')->default(0),
+                            ]),
+                    ])->columnSpan(['lg' => 1]),
+            ])->columns(3);
     }
 
     public static function table(Table $table): Table
     {
         return $table
             ->columns([
-                // 1. Invoice ID (Searchable)
                 Tables\Columns\TextColumn::make('id')
-                    ->label('Invoice #')
-                    ->searchable()
-                    ->sortable(),
-
-                // 2. Customer Name (Searchable)
-                Tables\Columns\TextColumn::make('customer.name')
+                    ->label('INV #')
                     ->searchable()
                     ->sortable()
-                    ->weight('bold'),
+                    ->weight('bold')
+                    ->prefix('INV-')
+                    ->description(fn (Invoice $record): string => $record->invoice_date),
 
-                // 3. Status with Colors (Badge)
+                Tables\Columns\TextColumn::make('customer.name')
+                    ->label('Customer')
+                    ->searchable()
+                    ->sortable()
+                    ->icon('heroicon-m-user')
+                    ->description(fn (Invoice $record): string => ucwords(str_replace('_', ' ', $record->payment_method))),
+
                 Tables\Columns\TextColumn::make('status')
                     ->badge()
                     ->color(fn(string $state): string => match ($state) {
@@ -190,84 +186,46 @@ class InvoiceResource extends Resource
                         'out_for_delivery' => 'info',
                         'delivered' => 'success',
                         'cancelled' => 'danger',
+                        default => 'gray',
                     }),
 
-                // 4. Total Amount (Formatted as Money)
                 Tables\Columns\TextColumn::make('total_amount')
+                    ->label('Amount')
                     ->money('LKR')
                     ->sortable()
+                    ->weight('bold')
+                    ->alignEnd()
                     ->summarize(Tables\Columns\Summarizers\Sum::make()->money('LKR')),
-
-                Tables\Columns\TextColumn::make('payment_method')
-                    ->badge()
-                    ->color(fn(string $state): string => match ($state) {
-                        'cash' => 'success',
-                        'bank_transfer' => 'info',
-                    })
-                    ->formatStateUsing(fn(string $state): string => ucwords(str_replace('_', ' ', $state)))
-                    ->sortable(),
-                // 5. Date
-                Tables\Columns\TextColumn::make('invoice_date')
-                    ->date()
-                    ->sortable(),
-
-                // 6. Created At (Hidden by default, toggleable)
-                Tables\Columns\TextColumn::make('created_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
             ])
-            ->defaultSort('created_at', 'desc') // Show newest first
-            ->filters([
-                // Optional: Add a filter for Status
-                Tables\Filters\SelectFilter::make('status')
-                    ->options([
-                        'draft' => 'Draft',
-                        'processing' => 'Processing',
-                        'out_for_delivery' => 'Out for Delivery',
-                        'delivered' => 'Delivered',
-                    ]),
-            ])
+            ->defaultSort('created_at', 'desc')
             ->actions([
                 Tables\Actions\EditAction::make(),
+                
+                Tables\Actions\ActionGroup::make([
+                    Tables\Actions\Action::make('dispatch')
+                        ->label('Dispatch')
+                        ->icon('heroicon-m-truck')
+                        ->color('warning')
+                        ->requiresConfirmation()
+                        ->visible(fn(Invoice $record) => $record->status === 'processing')
+                        ->action(fn(Invoice $record) => $record->update(['status' => 'out_for_delivery'])),
 
-                // Dispatch Button
-                Tables\Actions\Action::make('dispatch')
-                    ->label('Dispatch')
-                    ->icon('heroicon-m-truck')
-                    ->color('warning')
-                    ->requiresConfirmation()
-                    ->visible(fn(Invoice $record) => $record->status === 'processing')
-                    ->action(fn(Invoice $record) => $record->update(['status' => 'out_for_delivery'])),
+                    Tables\Actions\Action::make('deliver')
+                        ->label('Mark Delivered')
+                        ->icon('heroicon-m-check-badge')
+                        ->color('success')
+                        ->requiresConfirmation()
+                        ->visible(fn(Invoice $record) => $record->status === 'out_for_delivery')
+                        ->action(fn(Invoice $record) => $record->update(['status' => 'delivered'])),
 
-                // Deliver Button
-                Tables\Actions\Action::make('deliver')
-                    ->label('Mark Delivered')
-                    ->icon('heroicon-m-check-badge')
-                    ->color('success')
-                    ->requiresConfirmation()
-                    ->visible(fn(Invoice $record) => $record->status === 'out_for_delivery')
-                    ->action(fn(Invoice $record) => $record->update(['status' => 'delivered'])),
-
-                // Print Button
-                Tables\Actions\Action::make('print')
-                    ->label('Print')
-                    ->icon('heroicon-m-printer')
-                    ->url(fn(Invoice $record) => route('invoice.print', $record))
-                    ->openUrlInNewTab(),
-            ])
-            ->bulkActions([
-                Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\Action::make('print')
+                        ->label('Print Invoice')
+                        ->icon('heroicon-m-printer')
+                        ->color('gray')
+                        ->url(fn(Invoice $record) => route('invoice.print', $record))
+                        ->openUrlInNewTab(),
                 ]),
             ]);
-    }
-
-    public static function getRelations(): array
-    {
-        return [
-            //
-        ];
     }
 
     public static function getPages(): array
