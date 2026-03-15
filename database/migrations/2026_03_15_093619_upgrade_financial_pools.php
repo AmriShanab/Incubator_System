@@ -6,18 +6,15 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
         Schema::table('accounts', function (Blueprint $table) {
-            $table->decimal('captain_pool', 12, 2)->default(0)->after('balance');
-            $table->decimal('profit_poo', 12, 2)->default(0)->after('captain_pool');
+            $table->decimal('capital_pool', 12, 2)->default(0)->after('balance');
+            $table->decimal('profit_pool', 12, 2)->default(0)->after('capital_pool');
         });
 
         Schema::table('invoice_items', function (Blueprint $table) {
-            $table->decimal('unit_costs', 12, 2)->default(0)->after('quantity');
+            $table->decimal('unit_cost', 12, 2)->default(0)->after('quantity');
         });
 
         Schema::table('invoices', function (Blueprint $table) {
@@ -26,11 +23,18 @@ return new class extends Migration
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
-        //
+        Schema::table('accounts', function (Blueprint $table) {
+            $table->dropColumn(['capital_pool', 'profit_pool']);
+        });
+
+        Schema::table('invoice_items', function (Blueprint $table) {
+            $table->dropColumn('unit_cost');
+        });
+
+        Schema::table('invoices', function (Blueprint $table) {
+            $table->dropColumn(['total_cost', 'total_profit']);
+        });
     }
 };
