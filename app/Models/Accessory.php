@@ -14,6 +14,7 @@ class Accessory extends Model
         'cost_price',
         'selling_price',
         'current_stock',
+        'min_stock_alert',
     ];
 
     public function invoiceItems()

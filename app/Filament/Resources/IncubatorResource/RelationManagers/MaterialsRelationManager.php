@@ -7,8 +7,6 @@ use Filament\Forms\Form;
 use Filament\Resources\RelationManagers\RelationManager;
 use Filament\Tables;
 use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
 
 class MaterialsRelationManager extends RelationManager
 {
@@ -49,7 +47,7 @@ class MaterialsRelationManager extends RelationManager
                     ->form(fn(Tables\Actions\AttachAction $action): array => [
                         $action->getRecordSelect(),
                         Forms\Components\TextInput::make('quantity_required')
-                            ->label('Quantity Required per Incubator')
+                            ->label('Quantity Required per Product')
                             ->required()
                             ->numeric()
                             ->default(1),

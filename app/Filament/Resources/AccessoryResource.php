@@ -17,6 +17,10 @@ class AccessoryResource extends Resource
     protected static ?string $navigationIcon = 'heroicon-o-tag';
     
     protected static ?string $navigationLabel = 'Supplies';
+
+    protected static ?string $modelLabel = 'Supply';
+
+    protected static ?string $pluralModelLabel = 'Supplies';
     
     protected static ?string $navigationGroup = 'Inventory';
 
@@ -76,6 +80,14 @@ class AccessoryResource extends Resource
                                     ->label('Live Stock')
                                     ->disabledOn('edit') // Prevent manual cheating of stock on edit
                                     ->helperText('Updated via sales & purchases.'),
+
+                                Forms\Components\TextInput::make('min_stock_alert')
+                                    ->label('Low Stock Alert Level')
+                                    ->numeric()
+                                    ->default(5)
+                                    ->minValue(0)
+                                    ->required()
+                                    ->helperText('Item turns red when stock is at or below this quantity.'),
                             ]),
                     ])->columnSpan(['lg' => 1]),
             ])->columns(3);
@@ -113,9 +125,9 @@ class AccessoryResource extends Resource
                     ->numeric()
                     ->sortable()
                     ->badge()
-                    ->color(fn (int $state): string => match (true) {
-                        $state <= 5 => 'danger',   // Red if low stock
-                        $state <= 20 => 'warning', // Orange if getting low
+                    ->color(fn (int|float $state, Accessory $record): string => match (true) {
+                        $state <= (int) ($record->min_stock_alert ?? 5) => 'danger',
+                        $state <= ((int) ($record->min_stock_alert ?? 5) * 2) => 'warning',
                         default => 'success',      // Green if good
                     })
                     ->alignEnd(),

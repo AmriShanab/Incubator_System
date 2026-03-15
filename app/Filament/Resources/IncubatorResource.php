@@ -10,6 +10,8 @@ use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Str;
 
 class IncubatorResource extends Resource
 {
@@ -21,6 +23,10 @@ class IncubatorResource extends Resource
 
     protected static ?string $navigationLabel = 'Products';
 
+    protected static ?string $modelLabel = 'Product';
+
+    protected static ?string $pluralModelLabel = 'Products';
+
     public static function form(Form $form): Form
     {
         return $form
@@ -28,19 +34,30 @@ class IncubatorResource extends Resource
                 Forms\Components\Group::make()
                     ->schema([
                         Forms\Components\Section::make('General Information')
-                            ->description('Basic details and identification for this incubator.')
+                            ->description('Basic details and identification for this product.')
                             ->icon('heroicon-o-information-circle')
                             ->schema([
                                 Forms\Components\TextInput::make('name')
                                     ->required()
                                     ->maxLength(255)
-                                    ->placeholder('e.g., 120 Egg Incubator')
+                                    ->placeholder('e.g., 120 Egg Product')
+                                    ->live(onBlur: true)
+                                    ->afterStateUpdated(function (?string $state, Forms\Set $set, string $operation) {
+                                        if ($operation !== 'create') {
+                                            return;
+                                        }
+
+                                        $set('sku', static::generateSku($state));
+                                    })
                                     ->columnSpanFull(),
 
                                 Forms\Components\TextInput::make('sku')
                                     ->label('SKU (Stock Keeping Unit)')
                                     ->unique(ignoreRecord: true)
-                                    ->placeholder('e.g., INC-120'),
+                                    ->disabled()
+                                    ->dehydrated()
+                                    ->required()
+                                    ->helperText('Auto-generated from product name.'),
                             ])->columns(2),
                     ])->columnSpan(['lg' => 2]),
 
@@ -62,6 +79,14 @@ class IncubatorResource extends Resource
                                     ->disabled() // Locked because Production Logs manage this
                                     ->dehydrated(false)
                                     ->helperText('Updated automatically via Production Logs.'),
+
+                                Forms\Components\TextInput::make('low_stock_cycles')
+                                    ->label('Low Stock Cycles')
+                                    ->numeric()
+                                    ->default(2)
+                                    ->minValue(1)
+                                    ->required()
+                                    ->helperText('Item turns red when stock is below this production-cycle count.'),
                             ]),
                     ])->columnSpan(['lg' => 1]),
             ])->columns(3);
@@ -70,6 +95,7 @@ class IncubatorResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->modifyQueryUsing(fn (Builder $query) => $query->with('materials'))
             ->columns([
                 Tables\Columns\TextColumn::make('name')
                     ->label('Product Details')
@@ -82,12 +108,22 @@ class IncubatorResource extends Resource
                 Tables\Columns\TextColumn::make('current_stock')
                     ->label('Available Stock')
                     ->badge()
-                    ->color(fn (int $state): string => match (true) {
+                    ->color(fn (int|float $state, Incubator $record): string => match (true) {
+                        $state < (int) ($record->low_stock_cycles ?? 2) => 'danger',
+                        $state < ((int) ($record->low_stock_cycles ?? 2) * 2) => 'warning',
                         $state <= 0 => 'danger',
-                        $state <= 5 => 'warning',
                         default => 'success',
                     })
                     ->sortable(),
+
+                Tables\Columns\TextColumn::make('cost')
+                    ->label('Cost')
+                    ->state(fn (Incubator $record): float => (float) $record->materials->sum(
+                        fn ($material) => ((float) ($material->cost_per_unit ?? 0)) * ((float) ($material->pivot->quantity_required ?? 0))
+                    ))
+                    ->money('LKR')
+                    ->sortable(false)
+                    ->alignEnd(),
 
                 Tables\Columns\TextColumn::make('price')
                     ->label('Selling Price')
@@ -126,5 +162,24 @@ class IncubatorResource extends Resource
             'create' => Pages\CreateIncubator::route('/create'),
             'edit' => Pages\EditIncubator::route('/{record}/edit'),
         ];
+    }
+
+    public static function generateSku(?string $name, ?int $ignoreRecordId = null): string
+    {
+        $slug = Str::upper(Str::slug((string) $name, ''));
+        $base = 'PRD-' . ($slug !== '' ? Str::substr($slug, 0, 8) : 'ITEM');
+
+        $sku = $base;
+        $counter = 1;
+
+        while (Incubator::query()
+            ->when($ignoreRecordId, fn ($query) => $query->whereKeyNot($ignoreRecordId))
+            ->where('sku', $sku)
+            ->exists()) {
+            $sku = $base . '-' . str_pad((string) $counter, 2, '0', STR_PAD_LEFT);
+            $counter++;
+        }
+
+        return $sku;
     }
 }

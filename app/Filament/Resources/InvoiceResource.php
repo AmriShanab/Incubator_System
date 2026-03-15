@@ -39,14 +39,14 @@ class InvoiceResource extends Resource
                                         Forms\Components\MorphToSelect::make('sellable')
                                             ->label('Product / Supply')
                                             ->types([
-                                                Forms\Components\MorphToSelect\Type::make(\App\Models\Incubator::class)->titleAttribute('name')->label('Incubator'),
-                                                Forms\Components\MorphToSelect\Type::make(\App\Models\Accessory::class)->titleAttribute('name')->label('Accessory'),
+                                                Forms\Components\MorphToSelect\Type::make(\App\Models\Incubator::class)->titleAttribute('name')->label('Product'),
+                                                Forms\Components\MorphToSelect\Type::make(\App\Models\Accessory::class)->titleAttribute('name')->label('Supply'),
                                             ])
                                             ->searchable()
                                             ->preload()
                                             ->required()
                                             ->columnSpan(2)
-                                            ->reactive()
+                                            ->live() // Instantly updates when an item is selected from the dropdown
                                             ->afterStateUpdated(function ($state, Forms\Set $set) {
                                                 if ($state['sellable_type'] && $state['sellable_id']) {
                                                     $modelClass = $state['sellable_type'];
@@ -65,7 +65,7 @@ class InvoiceResource extends Resource
                                             ->prefix('LKR')
                                             ->required()
                                             ->columnSpan(1)
-                                            ->reactive()
+                                            ->live(onBlur: true) // OPTIMIZATION: Waits until you click away or press Tab
                                             ->afterStateUpdated(fn($state, Forms\Get $get, Forms\Set $set) => $set('row_total', (float)$state * (int)$get('quantity'))),
 
                                         Forms\Components\TextInput::make('quantity')
@@ -74,7 +74,7 @@ class InvoiceResource extends Resource
                                             ->minValue(1)
                                             ->required()
                                             ->columnSpan(1)
-                                            ->reactive()
+                                            ->live(onBlur: true) // OPTIMIZATION: Waits until you click away or press Tab
                                             ->afterStateUpdated(fn($state, Forms\Get $get, Forms\Set $set) => $set('row_total', (int)$state * (float)$get('unit_price'))),
 
                                         Forms\Components\TextInput::make('row_total')
@@ -88,7 +88,7 @@ class InvoiceResource extends Resource
                                     ->columns(5)
                                     ->defaultItems(1)
                                     ->reorderable(true)
-                                    ->live()
+                                    ->live(debounce: '500ms') // OPTIMIZATION: Waits half a second before calculating the Grand Total
                                     ->afterStateUpdated(function (Forms\Get $get, Forms\Set $set) {
                                         $items = $get('items');
                                         $total = collect($items)->sum(fn($item) => (float)($item['row_total'] ?? 0));

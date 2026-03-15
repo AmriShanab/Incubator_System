@@ -27,6 +27,7 @@ class ProductionLogResource extends Resource
                 Forms\Components\Section::make('Production Details')
                     ->schema([
                         Forms\Components\Select::make('incubator_id')
+                            ->label('Product')
                             ->relationship('incubator', 'name')
                             ->required()
                             ->searchable()

@@ -47,7 +47,7 @@
             @foreach($invoice->items as $item)
             <tr>
                 <td>{{ $item->sellable->name ?? 'Unknown Item' }}</td>
-                <td>{{ class_basename($item->sellable_type) }}</td>
+                <td>{{ match (class_basename($item->sellable_type)) { 'Incubator' => 'Product', 'Accessory' => 'Supply', default => class_basename($item->sellable_type), } }}</td>
                 <td>{{ $item->quantity }}</td>
                 <td>{{ number_format($item->unit_price, 2) }}</td>
                 <td>{{ number_format($item->row_total, 2) }}</td>

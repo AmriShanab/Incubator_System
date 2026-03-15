@@ -14,6 +14,7 @@ class Incubator extends Model
         'sku',
         'current_stock', // Ensure this is here
         'price',         // Ensure this is here
+        'low_stock_cycles',
     ];
 
     // This is the correct BOM relationship

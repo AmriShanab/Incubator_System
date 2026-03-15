@@ -32,10 +32,10 @@ class InventoryAdjustmentResource extends Resource
                                 ->label('Raw Material'),
                             Forms\Components\MorphToSelect\Type::make(\App\Models\Accessory::class)
                                 ->titleAttribute('name')
-                                ->label('Accessory / Part'),
+                                ->label('Supply'),
                             Forms\Components\MorphToSelect\Type::make(\App\Models\Incubator::class)
                                 ->titleAttribute('name')
-                                ->label('Finished Incubator'),
+                                ->label('Finished Product'),
                         ])
                         ->searchable()
                         ->preload()
@@ -76,7 +76,11 @@ class InventoryAdjustmentResource extends Resource
             ->columns([
                 Tables\Columns\TextColumn::make('adjustable_type')
                     ->label('Type')
-                    ->formatStateUsing(fn (string $state): string => class_basename($state))
+                    ->formatStateUsing(fn (string $state): string => match (class_basename($state)) {
+                        'Incubator' => 'Product',
+                        'Accessory' => 'Supply',
+                        default => class_basename($state),
+                    })
                     ->badge(),
 
                 Tables\Columns\TextColumn::make('adjustable.name')

@@ -4,7 +4,6 @@ namespace App\Filament\Resources\ProductionLogResource\Pages;
 
 use App\Filament\Resources\ProductionLogResource;
 use App\Models\Incubator;
-use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Support\Facades\DB;
@@ -25,7 +24,7 @@ class CreateProductionLog extends CreateRecord
             Notification::make()
             ->danger()
             ->title('Missing Bill Of Materials')
-            ->body("This Incubator doesn't have any materials assigned to it. Please add parts to it first.")
+            ->body("This product does not have any materials assigned to it. Please add supplies first.")
             ->send();
 
             $this->halt();
