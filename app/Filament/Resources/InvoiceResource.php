@@ -46,17 +46,20 @@ class InvoiceResource extends Resource
                                             ->preload()
                                             ->required()
                                             ->columnSpan(2)
-                                            ->live() // Instantly updates when an item is selected from the dropdown
-                                            ->afterStateUpdated(function ($state, Forms\Set $set) {
+                                            ->live() 
+                                            ->afterStateUpdated(function ($state, Forms\Set $set, Forms\Get $get) {
                                                 if ($state['sellable_type'] && $state['sellable_id']) {
                                                     $modelClass = $state['sellable_type'];
                                                     $record = $modelClass::find($state['sellable_id']);
                                                     if ($record) {
                                                         $price = $record->selling_price ?? $record->price ?? 0;
                                                         $set('unit_price', $price);
-                                                        $set('row_total', $price * 1);
+                                                        $set('row_total', $price * (int)$get('quantity'));
                                                     }
                                                 }
+                                                // Force Grand Total Update
+                                                $total = collect($get('../../items'))->sum(fn($item) => (float)($item['row_total'] ?? 0));
+                                                $set('../../total_amount', $total);
                                             }),
 
                                         Forms\Components\TextInput::make('unit_price')
@@ -65,8 +68,13 @@ class InvoiceResource extends Resource
                                             ->prefix('LKR')
                                             ->required()
                                             ->columnSpan(1)
-                                            ->live(onBlur: true) // OPTIMIZATION: Waits until you click away or press Tab
-                                            ->afterStateUpdated(fn($state, Forms\Get $get, Forms\Set $set) => $set('row_total', (float)$state * (int)$get('quantity'))),
+                                            ->live(onBlur: true) 
+                                            ->afterStateUpdated(function ($state, Forms\Get $get, Forms\Set $set) {
+                                                $set('row_total', (float)$state * (int)$get('quantity'));
+                                                // Force Grand Total Update
+                                                $total = collect($get('../../items'))->sum(fn($item) => (float)($item['row_total'] ?? 0));
+                                                $set('../../total_amount', $total);
+                                            }),
 
                                         Forms\Components\TextInput::make('quantity')
                                             ->numeric()
@@ -74,8 +82,13 @@ class InvoiceResource extends Resource
                                             ->minValue(1)
                                             ->required()
                                             ->columnSpan(1)
-                                            ->live(onBlur: true) // OPTIMIZATION: Waits until you click away or press Tab
-                                            ->afterStateUpdated(fn($state, Forms\Get $get, Forms\Set $set) => $set('row_total', (int)$state * (float)$get('unit_price'))),
+                                            ->live(onBlur: true) 
+                                            ->afterStateUpdated(function ($state, Forms\Get $get, Forms\Set $set) {
+                                                $set('row_total', (int)$state * (float)$get('unit_price'));
+                                                // Force Grand Total Update
+                                                $total = collect($get('../../items'))->sum(fn($item) => (float)($item['row_total'] ?? 0));
+                                                $set('../../total_amount', $total);
+                                            }),
 
                                         Forms\Components\TextInput::make('row_total')
                                             ->label('Subtotal')
@@ -88,8 +101,9 @@ class InvoiceResource extends Resource
                                     ->columns(5)
                                     ->defaultItems(1)
                                     ->reorderable(true)
-                                    ->live(debounce: '500ms') // OPTIMIZATION: Waits half a second before calculating the Grand Total
+                                    ->live() // Keeps the repeater live so deletions trigger the update below
                                     ->afterStateUpdated(function (Forms\Get $get, Forms\Set $set) {
+                                        // This catches when an entire row is deleted using the trash can icon
                                         $items = $get('items');
                                         $total = collect($items)->sum(fn($item) => (float)($item['row_total'] ?? 0));
                                         $set('total_amount', $total);
