@@ -36,8 +36,8 @@ class PurchaseOrder extends Model
     protected static function booted()
     {
         static::updated(function ($po) {
-            if($po->isDirty('status') && $po->status === 'received') {
-                if($po->account_id && $po->total_amount > 0 && !$po->transactions()->exists()) {
+            if ($po->isDirty('status') && $po->status === 'received') {
+                if ($po->account_id && $po->total_amount > 0 && !$po->transactions()->exists()) {
                     DB::transaction(function () use ($po) {
                         $po->transactions()->create([
                             'account_id' => $po->account_id,
@@ -47,12 +47,10 @@ class PurchaseOrder extends Model
                             'transaction_date' => now()->toDateString(),
                         ]);
                         $po->account->decrement('balance', $po->total_amount);
+                        $po->account->decrement('capital_pool', $po->total_amount);
                     });
                 }
             }
         });
     }
-
-
-
 }

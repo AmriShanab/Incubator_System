@@ -3,7 +3,6 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\AccountResource\Pages;
-use App\Filament\Resources\AccountResource\RelationManagers;
 use App\Models\Account;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -11,8 +10,6 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Support\Facades\DB;
 
 class AccountResource extends Resource
@@ -32,7 +29,20 @@ class AccountResource extends Resource
                     ->maxLength(255),
 
                 Forms\Components\TextInput::make('balance')
+                    ->label('Physical Balance')
                     ->required()
+                    ->default(0.00)
+                    ->prefix('LKR')
+                    ->disabled('edit'),
+                    
+                Forms\Components\TextInput::make('capital_pool')
+                    ->label('Investment Capital')
+                    ->default(0.00)
+                    ->prefix('LKR')
+                    ->disabled('edit'),
+                    
+                Forms\Components\TextInput::make('profit_pool')
+                    ->label('Free Profit')
                     ->default(0.00)
                     ->prefix('LKR')
                     ->disabled('edit'),
@@ -46,15 +56,29 @@ class AccountResource extends Resource
                 Tables\Columns\TextColumn::make('name')
                     ->searchable()
                     ->weight('bold'),
+
+                // The physical money in the drawer/bank
                 Tables\Columns\TextColumn::make('balance')
+                    ->label('Total Physical Balance')
                     ->money('LKR')
                     ->sortable()
-                    ->color(fn($state) => $state < 0 ? 'danger' : 'success')
+                    ->color('primary')
                     ->weight('bold'),
-                Tables\Columns\TextColumn::make('updated_at')
-                    ->label('Last Activity')
-                    ->dateTime()
-                    ->sortable(),
+
+                // The money strictly for buying stock
+                Tables\Columns\TextColumn::make('capital_pool')
+                    ->label('Investment / Capital')
+                    ->money('LKR')
+                    ->color('warning')
+                    ->description('Reserved for materials'),
+
+                // The money they can safely take home!
+                Tables\Columns\TextColumn::make('profit_pool')
+                    ->label('Free Profit')
+                    ->money('LKR')
+                    ->weight('bold')
+                    ->color('success')
+                    ->description('Available earnings'),
             ])
             ->actions([
                 Tables\Actions\EditAction::make(),
@@ -64,7 +88,6 @@ class AccountResource extends Resource
                     ->label('Settle COD')
                     ->icon('heroicon-m-arrows-right-left')
                     ->color('warning')
-                    // Only show this button on the COD account if it has money
                     ->visible(fn(Account $record) => $record->name === 'COD Partner' && $record->balance > 0)
                     ->form([
                         Forms\Components\Select::make('destination_account_id')
@@ -85,7 +108,7 @@ class AccountResource extends Resource
                             ->numeric()
                             ->default(0)
                             ->required()
-                            ->helperText('This amount will be logged as an expense and subtracted from the transfer.'),
+                            ->helperText('This fee is an expense and will be deducted directly from your Free Profit pool.'),
                     ])
                     ->action(function (Account $record, array $data) {
                         $transferAmount = (float) $data['transfer_amount'];
@@ -97,6 +120,13 @@ class AccountResource extends Resource
                         // Database Transaction ensures if math fails, nothing saves
                         DB::transaction(function () use ($record, $destinationAccount, $transferAmount, $courierFee, $netAmount) {
 
+                            // Calculate the ratio of the transfer to move the virtual pools accurately
+                            // If they transfer the full balance, the ratio is 1 (100%)
+                            $transferRatio = $record->balance > 0 ? ($transferAmount / $record->balance) : 0;
+                            
+                            $capitalToMove = $record->capital_pool * $transferRatio;
+                            $profitToMove = $record->profit_pool * $transferRatio;
+
                             // 1. Log the Courier Fee as an expense
                             if ($courierFee > 0) {
                                 $record->transactions()->create([
@@ -105,27 +135,36 @@ class AccountResource extends Resource
                                     'description' => 'Courier processing fee during settlement',
                                     'transaction_date' => now(),
                                 ]);
-                                $record->decrement('balance', $courierFee);
                             }
 
-                            // 2. Move the Net Amount out of COD
-                            if ($netAmount > 0) {
+                            // 2. Move the Money out of COD
+                            if ($transferAmount > 0) {
                                 $record->transactions()->create([
                                     'type' => 'out',
                                     'amount' => $netAmount,
                                     'description' => "Settlement transfer to {$destinationAccount->name}",
                                     'transaction_date' => now(),
                                 ]);
-                                $record->decrement('balance', $netAmount);
+                                
+                                // Deduct Physical Cash
+                                $record->decrement('balance', $transferAmount);
+                                // Deduct Virtual Pools
+                                $record->decrement('capital_pool', $capitalToMove);
+                                $record->decrement('profit_pool', $profitToMove);
 
-                                // 3. Move the Net Amount into the Bank
+                                // 3. Move the Money into the Bank
                                 $destinationAccount->transactions()->create([
                                     'type' => 'in',
                                     'amount' => $netAmount,
                                     'description' => "Settlement received from {$record->name}",
                                     'transaction_date' => now(),
                                 ]);
+                                
+                                // Add Physical Cash
                                 $destinationAccount->increment('balance', $netAmount);
+                                // Add Virtual Pools (Courier fee eats into the profit!)
+                                $destinationAccount->increment('capital_pool', $capitalToMove);
+                                $destinationAccount->increment('profit_pool', $profitToMove - $courierFee);
                             }
                         });
 
@@ -140,9 +179,7 @@ class AccountResource extends Resource
 
     public static function getRelations(): array
     {
-        return [
-            //
-        ];
+        return [];
     }
 
     public static function getPages(): array

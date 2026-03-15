@@ -33,11 +33,12 @@ class Expense extends Model
                     'account_id' => $expense->account_id,
                     'type' => 'out',
                     'amount' => $expense->amount,
-                    'description' =>$expense->description,
+                    'description' => $expense->description,
                     'transaction_date' => $expense->expense_date,
                 ]);
 
                 $expense->account->decrement('balance', $expense->amount);
+                $expense->account->decrement('profit_pool', $expense->amount);
             });
         });
 

@@ -38,9 +38,18 @@ class Invoice extends Model
         static::updated(function ($invoice) {
             if ($invoice->isDirty('status') && $invoice->status === 'delivered') {
 
+                $totalCost = $invoice->items->sum(fn($item) => $item->unit_cost * $item->quantity);
+                $totalProfit = $invoice->total_amount - $totalCost;
+
+                // Save it to the invoice history
+                $invoice->updateQuietly([
+                    'total_cost' => $totalCost,
+                    'total_profit' => $totalProfit,
+                ]); 
+
                 if ($invoice->account_id && $invoice->total_amount > 0 && !$invoice->transactions()->exists()) {
 
-                    DB::transaction(function () use ($invoice) {
+                    DB::transaction(function () use ($invoice, $totalCost, $totalProfit) {
                         $invoice->transactions()->create([
                             'account_id' => $invoice->account_id,
                             'type' => 'in',
@@ -50,6 +59,9 @@ class Invoice extends Model
                         ]);
 
                         $invoice->account->increment('balance', $invoice->total_amount);
+                        $invoice->account->increment('captain_pool', $totalCost);
+                        $invoice->account->increment('profit_pool', $totalProfit);
+
                     });
                 }
             }

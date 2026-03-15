@@ -10,6 +10,7 @@ use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Hidden;
 use Filament\Forms\Set;
 use Filament\Forms\Get;
 use App\Models\Incubator;
@@ -69,7 +70,7 @@ class PosTerminal extends Page implements HasForms
                                     ])
                                     ->searchable()
                                     ->required()
-                                    ->autofocus() // Automatically puts the cursor here so you can scan a barcode or type instantly
+                                    ->autofocus() 
                                     ->disableOptionsWhenSelectedInSiblingRepeaterItems()
                                     ->columnSpan(3)
                                     ->live()
@@ -80,11 +81,16 @@ class PosTerminal extends Page implements HasForms
                                             $record = $type::find($id);
                                             
                                             $price = $record->selling_price ?? $record->price ?? 0;
+                                            $cost = $record->cost_price ?? $record->cost_per_unit ?? 0; // Fetch the hidden cost
+                                            
                                             $set('unit_price', $price);
+                                            $set('unit_cost', $cost); // Save the hidden cost
                                             $set('row_total', $price * (int)$get('quantity'));
                                             $this->updateTotal();
                                         }
                                     }),
+
+                                Hidden::make('unit_cost')->default(0), // Keeps track of cost quietly
 
                                 TextInput::make('quantity')
                                     ->numeric()
@@ -169,6 +175,7 @@ class PosTerminal extends Page implements HasForms
                     'sellable_id' => $id,
                     'quantity' => $item['quantity'],
                     'unit_price' => $item['unit_price'],
+                    'unit_cost' => $item['unit_cost'] ?? 0, // Save cost to the database
                     'row_total' => $item['row_total'],
                 ]);
 
@@ -180,8 +187,6 @@ class PosTerminal extends Page implements HasForms
             }
 
             // 3. Trigger the Financial Engine
-            // By shifting to delivered, your Invoice Model's booted() method takes over 
-            // and automatically adds the money to the Cash Account ledger!
             $invoice->update(['status' => 'delivered']);
 
             Notification::make()->title('Sale Completed Successfully!')->success()->send();

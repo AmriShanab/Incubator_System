@@ -53,7 +53,10 @@ class InvoiceResource extends Resource
                                                     $record = $modelClass::find($state['sellable_id']);
                                                     if ($record) {
                                                         $price = $record->selling_price ?? $record->price ?? 0;
+                                                        $cost = $record->cost_price ?? $record->cost_per_unit ?? 0; // Fetch the cost
+                                                        
                                                         $set('unit_price', $price);
+                                                        $set('unit_cost', $cost); // Set hidden cost
                                                         $set('row_total', $price * (int)$get('quantity'));
                                                     }
                                                 }
@@ -61,6 +64,8 @@ class InvoiceResource extends Resource
                                                 $total = collect($get('../../items'))->sum(fn($item) => (float)($item['row_total'] ?? 0));
                                                 $set('../../total_amount', $total);
                                             }),
+
+                                        Forms\Components\Hidden::make('unit_cost')->default(0), // The silent cost tracker
 
                                         Forms\Components\TextInput::make('unit_price')
                                             ->label('Unit Price')
@@ -101,9 +106,8 @@ class InvoiceResource extends Resource
                                     ->columns(5)
                                     ->defaultItems(1)
                                     ->reorderable(true)
-                                    ->live() // Keeps the repeater live so deletions trigger the update below
+                                    ->live()
                                     ->afterStateUpdated(function (Forms\Get $get, Forms\Set $set) {
-                                        // This catches when an entire row is deleted using the trash can icon
                                         $items = $get('items');
                                         $total = collect($items)->sum(fn($item) => (float)($item['row_total'] ?? 0));
                                         $set('total_amount', $total);
