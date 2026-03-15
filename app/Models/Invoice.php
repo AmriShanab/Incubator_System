@@ -7,12 +7,13 @@ use Illuminate\Support\Facades\DB;
 
 class Invoice extends Model
 {
-    protected $fillable = ['customer_id', 'invoice_date', 'status', 'total_amount', 'payment_method'];
+    protected $fillable = ['customer_id', 'invoice_date', 'status', 'total_amount', 'payment_method', 'account_id'];
 
     public function customer()
     {
         return $this->belongsTo(Customer::class);
     }
+    
     public function items()
     {
         return $this->hasMany(InvoiceItem::class);
@@ -59,7 +60,7 @@ class Invoice extends Model
                         ]);
 
                         $invoice->account->increment('balance', $invoice->total_amount);
-                        $invoice->account->increment('captain_pool', $totalCost);
+                        $invoice->account->increment('capital_pool', $totalCost); // FIXED SPELLING HERE
                         $invoice->account->increment('profit_pool', $totalProfit);
 
                     });
