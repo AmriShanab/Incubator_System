@@ -1,0 +1,38 @@
+<?php
+
+namespace Database\Seeders;
+
+use Illuminate\Database\Seeder;
+use App\Models\User;
+use Illuminate\Support\Facades\Hash;
+
+class UserRoleSeeder extends Seeder
+{
+    /**
+     * Run the database seeds.
+     */
+    public function run(): void
+    {
+    
+
+        // 2. The Cashier (Front Desk)
+        User::updateOrCreate(
+            ['email' => 'cashier@test.com'],
+            [
+                'name' => 'Main Cashier',
+                'password' => Hash::make('password'),
+                'role' => 'cashier',
+            ]
+        );
+
+        // 3. The Inventory Clerk (Warehouse)
+        User::updateOrCreate(
+            ['email' => 'inventory@test.com'],
+            [
+                'name' => 'Inventory Manager',
+                'password' => Hash::make('password'),
+                'role' => 'inventory',
+            ]
+        );
+    }
+}
