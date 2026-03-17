@@ -20,6 +20,11 @@ class SupplierResource extends Resource
     
     protected static ?int $navigationSort = 1;
 
+    public static function canViewAny(): bool
+    {
+        return in_array(\Illuminate\Support\Facades\Auth::user()?->role, ['admin', 'inventory']);
+    }
+
     public static function form(Form $form): Form
     {
         return $form
@@ -121,7 +126,8 @@ class SupplierResource extends Resource
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\DeleteBulkAction::make()
+                        ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
                 ]),
             ]);
     }

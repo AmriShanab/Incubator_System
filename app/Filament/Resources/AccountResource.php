@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\AccountResource\Pages;
+use App\Filament\Resources\AccountResource\RelationManagers; // <-- ADDED THIS LINE
 use App\Models\Account;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -19,6 +20,11 @@ class AccountResource extends Resource
     protected static ?string $navigationIcon = 'heroicon-o-building-library';
 
     protected static ?string $navigationGroup = 'Accounting';
+
+    public static function canViewAny(): bool
+    {
+        return \Illuminate\Support\Facades\Auth::user()?->role === 'admin';
+    }
 
     public static function form(Form $form): Form
     {
@@ -117,17 +123,11 @@ class AccountResource extends Resource
 
                         $destinationAccount = Account::find($data['destination_account_id']);
 
-                        // Database Transaction ensures if math fails, nothing saves
                         DB::transaction(function () use ($record, $destinationAccount, $transferAmount, $courierFee, $netAmount) {
-
-                            // Calculate the ratio of the transfer to move the virtual pools accurately
-                            // If they transfer the full balance, the ratio is 1 (100%)
                             $transferRatio = $record->balance > 0 ? ($transferAmount / $record->balance) : 0;
-                            
+
                             $capitalToMove = $record->capital_pool * $transferRatio;
                             $profitToMove = $record->profit_pool * $transferRatio;
-
-                            // 1. Log the Courier Fee as an expense
                             if ($courierFee > 0) {
                                 $record->transactions()->create([
                                     'type' => 'out',
@@ -137,7 +137,6 @@ class AccountResource extends Resource
                                 ]);
                             }
 
-                            // 2. Move the Money out of COD
                             if ($transferAmount > 0) {
                                 $record->transactions()->create([
                                     'type' => 'out',
@@ -145,24 +144,19 @@ class AccountResource extends Resource
                                     'description' => "Settlement transfer to {$destinationAccount->name}",
                                     'transaction_date' => now(),
                                 ]);
-                                
-                                // Deduct Physical Cash
+
                                 $record->decrement('balance', $transferAmount);
-                                // Deduct Virtual Pools
                                 $record->decrement('capital_pool', $capitalToMove);
                                 $record->decrement('profit_pool', $profitToMove);
 
-                                // 3. Move the Money into the Bank
                                 $destinationAccount->transactions()->create([
                                     'type' => 'in',
                                     'amount' => $netAmount,
                                     'description' => "Settlement received from {$record->name}",
                                     'transaction_date' => now(),
                                 ]);
-                                
-                                // Add Physical Cash
+
                                 $destinationAccount->increment('balance', $netAmount);
-                                // Add Virtual Pools (Courier fee eats into the profit!)
                                 $destinationAccount->increment('capital_pool', $capitalToMove);
                                 $destinationAccount->increment('profit_pool', $profitToMove - $courierFee);
                             }
@@ -173,19 +167,24 @@ class AccountResource extends Resource
                             ->title('Settlement Complete')
                             ->body("Successfully deposited LKR " . number_format($netAmount, 2) . " into {$destinationAccount->name}.")
                             ->send();
-                    })
+                    }),
+
+                Tables\Actions\ViewAction::make(),
             ]);
     }
 
     public static function getRelations(): array
     {
-        return [];
+        return [
+            RelationManagers\TransactionsRelationManager::class,
+        ];
     }
 
     public static function getPages(): array
     {
-      return [
+        return [
             'index' => Pages\ListAccounts::route('/'),
+            'view' => Pages\ViewAccount::route('/{record}'),
         ];
     }
 }

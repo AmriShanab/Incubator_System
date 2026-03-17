@@ -20,6 +20,11 @@ class MaterialResource extends Resource
 
     protected static ?string $navigationLabel = 'Raw Materials';
 
+    public static function canViewAny(): bool
+    {
+        return in_array(\Illuminate\Support\Facades\Auth::user()?->role, ['admin', 'inventory']);
+    }
+
     /**
      * Premium Feature: Sidebar Badge for Low Materials
      */
@@ -131,11 +136,13 @@ class MaterialResource extends Resource
             ->defaultSort('name', 'asc')
             ->actions([
                 Tables\Actions\EditAction::make(),
-                Tables\Actions\DeleteAction::make(),
+                Tables\Actions\DeleteAction::make()
+                    ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\DeleteBulkAction::make()
+                        ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
                 ]),
             ]);
     }

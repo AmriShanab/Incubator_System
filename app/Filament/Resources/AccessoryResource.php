@@ -15,18 +15,20 @@ class AccessoryResource extends Resource
     protected static ?string $model = Accessory::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-tag';
-    
+
     protected static ?string $navigationLabel = 'Supplies';
 
     protected static ?string $modelLabel = 'Supply';
 
     protected static ?string $pluralModelLabel = 'Supplies';
-    
+
     protected static ?string $navigationGroup = 'Inventory';
 
-    /**
-     * Premium Feature: Sidebar Badge for Low Stock
-     */
+    public static function canViewAny(): bool
+    {
+        return in_array(\Illuminate\Support\Facades\Auth::user()?->role, ['admin', 'inventory']);
+    }
+
     public static function getNavigationBadge(): ?string
     {
         $lowStockCount = static::getModel()::where('current_stock', '<=', 5)->count();
@@ -52,7 +54,15 @@ class AccessoryResource extends Resource
                                     ->required()
                                     ->maxLength(255)
                                     ->label('Item Name')
-                                    ->placeholder('e.g., Temperature Sensor')
+                                    ->placeholder('e.g., Vitamin C Drops')
+                                    ->columnSpanFull(),
+
+                                // THIS BELONGS IN THE FORM! 
+                                Forms\Components\TextInput::make('category')
+                                    ->required()
+                                    ->label('Category')
+                                    ->placeholder('Type a new category or select existing')
+                                    ->datalist(fn() => Accessory::select('category')->distinct()->pluck('category')->toArray())
                                     ->columnSpanFull(),
                             ]),
                     ])->columnSpan(['lg' => 2]),
@@ -78,7 +88,7 @@ class AccessoryResource extends Resource
                                     ->numeric()
                                     ->default(0)
                                     ->label('Live Stock')
-                                    ->disabledOn('edit') // Prevent manual cheating of stock on edit
+                                    ->disabledOn('edit')
                                     ->helperText('Updated via sales & purchases.'),
 
                                 Forms\Components\TextInput::make('min_stock_alert')
@@ -101,23 +111,32 @@ class AccessoryResource extends Resource
                     ->searchable()
                     ->sortable()
                     ->weight('bold')
-                    // Show the base cost under the item name
-                    ->description(fn (Accessory $record): string => 'Cost: LKR ' . number_format($record->cost_price, 2)),
+                    ->description(fn(Accessory $record): string => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'
+                        ? 'Cost: LKR ' . number_format($record->cost_price, 2)
+                        : ''),
+
+                Tables\Columns\TextColumn::make('category')
+                    ->label('Category')
+                    ->badge()
+                    ->color('info')
+                    ->formatStateUsing(fn (string $state): string => ucfirst($state))
+                    ->sortable()
+                    ->searchable(),
 
                 Tables\Columns\TextColumn::make('selling_price')
                     ->money('LKR')
                     ->sortable()
                     ->label('Selling Price')
                     ->weight('bold')
-                    ->alignEnd(), // Accounting standard alignment
+                    ->alignEnd(),
 
-                // Premium computed column using native money formatting
                 Tables\Columns\TextColumn::make('profit')
                     ->label('Profit Margin')
-                    ->state(fn (Accessory $record): float => (float) ($record->selling_price - $record->cost_price))
+                    ->state(fn(Accessory $record): float => (float) ($record->selling_price - $record->cost_price))
                     ->money('LKR')
-                    ->color(fn (float $state): string => $state > 0 ? 'success' : 'danger')
+                    ->color(fn(float $state): string => $state > 0 ? 'success' : 'danger')
                     ->sortable()
+                    ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin')
                     ->alignEnd(),
 
                 Tables\Columns\TextColumn::make('current_stock')
@@ -125,21 +144,23 @@ class AccessoryResource extends Resource
                     ->numeric()
                     ->sortable()
                     ->badge()
-                    ->color(fn (int|float $state, Accessory $record): string => match (true) {
+                    ->color(fn(int|float $state, Accessory $record): string => match (true) {
                         $state <= (int) ($record->min_stock_alert ?? 5) => 'danger',
                         $state <= ((int) ($record->min_stock_alert ?? 5) * 2) => 'warning',
-                        default => 'success',      // Green if good
+                        default => 'success',
                     })
                     ->alignEnd(),
             ])
             ->defaultSort('name', 'asc')
             ->actions([
                 Tables\Actions\EditAction::make(),
-                Tables\Actions\DeleteAction::make(),
+                Tables\Actions\DeleteAction::make()
+                    ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\DeleteBulkAction::make()
+                        ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
                 ]),
             ]);
     }

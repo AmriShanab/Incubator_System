@@ -20,6 +20,11 @@ class ProductionLogResource extends Resource
 
     protected static ?string $navigationGroup = 'Inventory';
 
+    public static function canViewAny(): bool
+    {
+        return in_array(\Illuminate\Support\Facades\Auth::user()?->role, ['admin', 'inventory']);
+    }
+
     public static function form(Form $form): Form
     {
         return $form

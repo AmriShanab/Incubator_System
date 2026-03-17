@@ -27,6 +27,11 @@ class IncubatorResource extends Resource
 
     protected static ?string $pluralModelLabel = 'Products';
 
+    public static function canViewAny(): bool
+    {
+        return in_array(\Illuminate\Support\Facades\Auth::user()?->role, ['admin', 'inventory']);
+    }
+
     public static function form(Form $form): Form
     {
         return $form
@@ -102,7 +107,6 @@ class IncubatorResource extends Resource
                     ->searchable()
                     ->sortable()
                     ->weight('bold')
-                    // Combines SKU under the Name in gray text for a cleaner table
                     ->description(fn (Incubator $record): string => 'SKU: ' . ($record->sku ?? 'N/A')),
 
                 Tables\Columns\TextColumn::make('current_stock')
@@ -123,14 +127,30 @@ class IncubatorResource extends Resource
                     ))
                     ->money('LKR')
                     ->sortable(false)
+                    ->color('warning')
+                    ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin')
                     ->alignEnd(),
 
                 Tables\Columns\TextColumn::make('price')
                     ->label('Selling Price')
                     ->money('LKR')
                     ->sortable()
+                    ->color('primary')
+                    ->alignEnd(), 
+
+                Tables\Columns\TextColumn::make('profit_margin')
+                    ->label('Profit Margin')
+                    ->state(function (Incubator $record): float {
+                        $cost = (float) $record->materials->sum(
+                            fn ($material) => ((float) ($material->cost_per_unit ?? 0)) * ((float) ($material->pivot->quantity_required ?? 0))
+                        );
+                        return (float) $record->price - $cost;
+                    })
+                    ->money('LKR')
                     ->weight('bold')
-                    ->alignEnd(), // Aligns numbers to the right (Accounting standard)
+                    ->color(fn (float $state): string => $state >= 0 ? 'success' : 'danger')
+                    ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin')
+                    ->alignEnd(),
 
                 Tables\Columns\TextColumn::make('created_at')
                     ->dateTime()
@@ -140,10 +160,13 @@ class IncubatorResource extends Resource
             ->defaultSort('created_at', 'desc')
             ->actions([
                 Tables\Actions\EditAction::make(),
+                Tables\Actions\DeleteAction::make()
+                    ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\DeleteBulkAction::make()
+                        ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
                 ]),
             ]);
     }

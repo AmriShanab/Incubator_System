@@ -47,15 +47,16 @@ class AdminPanelProvider extends PanelProvider
             </style>'),
             )
             ->font('Poppins', provider: GoogleFontProvider::class)
+            
 
 
             // --- ENABLE DARK MODE TOGGLE ---
             ->darkMode(true)
             ->darkModeBrandLogo(asset('img/logo-white-removebg-preview.png'))
-            // Brand
-            ->brandName('SN Incubators')
+     
+            ->brandName('SN Tech')
             ->colors([
-                'primary' => Color::Cyan, // Or whichever color matches your Rooster logo!
+                'primary' => Color::Cyan, 
                 'danger' => Color::Rose,
                 'gray' => Color::Slate,
                 'info' => Color::Blue,

@@ -22,6 +22,11 @@ class PurchaseOrderResource extends Resource
 
     protected static ?string $navigationGroup = 'Supply Chain';
 
+    public static function canViewAny(): bool
+    {
+        return in_array(\Illuminate\Support\Facades\Auth::user()?->role, ['admin', 'inventory']);
+    }
+
     public static function form(Form $form): Form
     {
         return $form
@@ -73,7 +78,7 @@ class PurchaseOrderResource extends Resource
                                             ->prefix('LKR')
                                             ->reactive()
                                             ->afterStateUpdated(fn ($state, Forms\Get $get, Forms\Set $set) =>
-                                                $set('row_total', $state * $get('quantity'))
+                                                $set('row_total', (float)$state * (int)$get('quantity'))
                                             )->columnSpan(1),
 
                                         Forms\Components\TextInput::make('quantity')
@@ -82,7 +87,7 @@ class PurchaseOrderResource extends Resource
                                             ->required()
                                             ->reactive()
                                             ->afterStateUpdated(fn ($state, Forms\Get $get, Forms\Set $set) =>
-                                                $set('row_total', $state * $get('unit_cost'))
+                                                $set('row_total', (int)$state * (float)$get('unit_cost'))
                                             )->columnSpan(1),
 
                                         Forms\Components\TextInput::make('row_total')
@@ -97,7 +102,7 @@ class PurchaseOrderResource extends Resource
                                     ->live()
                                     ->afterStateUpdated(function (Forms\Get $get, Forms\Set $set) {
                                         $items = $get('items');
-                                        $total = collect($items)->sum(fn ($item) => $item['row_total'] ?? 0);
+                                        $total = collect($items)->sum(fn ($item) => (float)($item['row_total'] ?? 0));
                                         $set('total_amount', $total);
                                     }),
                             ]),
@@ -177,14 +182,18 @@ class PurchaseOrderResource extends Resource
             ])
             ->defaultSort('created_at', 'desc')
             ->actions([
-                Tables\Actions\EditAction::make(),
+                Tables\Actions\EditAction::make()
+                    // UI UPGRADE: Hide the edit button if the order is already locked in!
+                    ->visible(fn (PurchaseOrder $record) => $record->status === 'ordered'),
+                    
                 Tables\Actions\Action::make('receive')
                     ->label('Receive Goods')
                     ->icon('heroicon-m-arrow-down-tray')
                     ->color('success')
                     ->requiresConfirmation()
                     ->modalHeading('Receive Inventory?')
-                    ->modalDescription('This will add these items to stock, update cost prices, and deduct money from your account.')
+                    // UI UPGRADE: Explicitly state it hits the Capital Pool
+                    ->modalDescription('This will add these items to stock, update cost prices, and deduct money from your account\'s Investment Capital Pool.')
                     ->visible(fn (PurchaseOrder $record) => $record->status === 'ordered')
                     ->action(function (PurchaseOrder $record) {
                         foreach ($record->items as $item) {

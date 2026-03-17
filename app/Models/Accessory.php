@@ -11,10 +11,12 @@ class Accessory extends Model
 
     protected $fillable = [
         'name',
+        'category',
         'cost_price',
         'selling_price',
         'current_stock',
         'min_stock_alert',
+        
     ];
 
     public function invoiceItems()

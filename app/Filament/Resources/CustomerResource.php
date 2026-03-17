@@ -21,6 +21,11 @@ class CustomerResource extends Resource
     // Puts it near the top of the Sales group
     protected static ?int $navigationSort = 1; 
 
+    public static function canViewAny(): bool
+    {
+        return in_array(\Illuminate\Support\Facades\Auth::user()?->role, ['admin', 'cashier']);
+    }
+
     public static function form(Form $form): Form
     {
         return $form
@@ -110,7 +115,8 @@ class CustomerResource extends Resource
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\DeleteBulkAction::make()
+                        ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
                 ]),
             ]);
     }

@@ -18,6 +18,11 @@ class InvoiceResource extends Resource
 
     protected static ?string $navigationGroup = 'Sales';
 
+    public static function canViewAny(): bool
+    {
+        return in_array(\Illuminate\Support\Facades\Auth::user()?->role, ['admin', 'cashier']);
+    }
+
     public static function form(Form $form): Form
     {
         return $form
@@ -46,17 +51,31 @@ class InvoiceResource extends Resource
                                             ->preload()
                                             ->required()
                                             ->columnSpan(2)
-                                            ->live() 
+                                            ->live()
                                             ->afterStateUpdated(function ($state, Forms\Set $set, Forms\Get $get) {
                                                 if ($state['sellable_type'] && $state['sellable_id']) {
                                                     $modelClass = $state['sellable_type'];
                                                     $record = $modelClass::find($state['sellable_id']);
+
                                                     if ($record) {
                                                         $price = $record->selling_price ?? $record->price ?? 0;
-                                                        $cost = $record->cost_price ?? $record->cost_per_unit ?? 0; // Fetch the cost
-                                                        
+
+                                                        // --- SMART COST FETCHER ---
+                                                        $cost = 0;
+                                                        if (class_basename($modelClass) === 'Accessory') { // Note: use $type instead of $modelClass in PosTerminal.php
+                                                            $cost = $record->cost_price ?? 0;
+                                                        } else {
+                                                            // Bulletproof BOM Calculation
+                                                            $cost = $record->cost ?? \Illuminate\Support\Facades\DB::table('incubator_material')
+                                                                ->join('materials', 'incubator_material.material_id', '=', 'materials.id')
+                                                                ->where('incubator_id', $record->id)
+                                                                ->selectRaw('SUM(incubator_material.quantity_required * materials.cost_per_unit) as calculated_cost')
+                                                                ->value('calculated_cost') ?? 0;
+                                                        }
+                                                        // --------------------------
+
                                                         $set('unit_price', $price);
-                                                        $set('unit_cost', $cost); // Set hidden cost
+                                                        $set('unit_cost', $cost); // Saves the dynamically calculated BOM cost!
                                                         $set('row_total', $price * (int)$get('quantity'));
                                                     }
                                                 }
@@ -73,7 +92,7 @@ class InvoiceResource extends Resource
                                             ->prefix('LKR')
                                             ->required()
                                             ->columnSpan(1)
-                                            ->live(onBlur: true) 
+                                            ->live(onBlur: true)
                                             ->afterStateUpdated(function ($state, Forms\Get $get, Forms\Set $set) {
                                                 $set('row_total', (float)$state * (int)$get('quantity'));
                                                 // Force Grand Total Update
@@ -87,7 +106,7 @@ class InvoiceResource extends Resource
                                             ->minValue(1)
                                             ->required()
                                             ->columnSpan(1)
-                                            ->live(onBlur: true) 
+                                            ->live(onBlur: true)
                                             ->afterStateUpdated(function ($state, Forms\Get $get, Forms\Set $set) {
                                                 $set('row_total', (int)$state * (float)$get('unit_price'));
                                                 // Force Grand Total Update
@@ -140,6 +159,7 @@ class InvoiceResource extends Resource
                                         'processing' => 'Processing',
                                         'out_for_delivery' => 'Out for Delivery',
                                         'delivered' => 'Delivered',
+                                        'cancelled' => 'Cancelled',
                                     ])
                                     ->default('draft')
                                     ->required()
@@ -149,18 +169,9 @@ class InvoiceResource extends Resource
                         Forms\Components\Section::make('Payment Info')
                             ->icon('heroicon-o-credit-card')
                             ->schema([
-                                Forms\Components\Select::make('payment_method')
-                                    ->options([
-                                        'cash' => 'Cash',
-                                        'bank_transfer' => 'Bank Transfer',
-                                    ])
-                                    ->default('cash')
-                                    ->required()
-                                    ->native(false),
-
                                 Forms\Components\Select::make('account_id')
                                     ->relationship('account', 'name')
-                                    ->label('Deposit To')
+                                    ->label('Payment Method')
                                     ->required()
                                     ->preload()
                                     ->searchable()
@@ -187,14 +198,14 @@ class InvoiceResource extends Resource
                     ->sortable()
                     ->weight('bold')
                     ->prefix('INV-')
-                    ->description(fn (Invoice $record): string => $record->invoice_date),
+                    ->description(fn(Invoice $record): string => $record->invoice_date),
 
                 Tables\Columns\TextColumn::make('customer.name')
                     ->label('Customer')
                     ->searchable()
                     ->sortable()
                     ->icon('heroicon-m-user')
-                    ->description(fn (Invoice $record): string => ucwords(str_replace('_', ' ', $record->payment_method))),
+                    ->description(fn(Invoice $record): string => ucwords(str_replace('_', ' ', $record->payment_method))),
 
                 Tables\Columns\TextColumn::make('status')
                     ->badge()
@@ -218,8 +229,16 @@ class InvoiceResource extends Resource
             ->defaultSort('created_at', 'desc')
             ->actions([
                 Tables\Actions\EditAction::make(),
-                
+
                 Tables\Actions\ActionGroup::make([
+                    Tables\Actions\Action::make('process')
+                        ->label('Start Processing')
+                        ->icon('heroicon-m-play')
+                        ->color('primary')
+                        ->requiresConfirmation()
+                        ->visible(fn(Invoice $record) => $record->status === 'draft')
+                        ->action(fn(Invoice $record) => $record->update(['status' => 'processing'])),
+
                     Tables\Actions\Action::make('dispatch')
                         ->label('Dispatch')
                         ->icon('heroicon-m-truck')
@@ -235,6 +254,14 @@ class InvoiceResource extends Resource
                         ->requiresConfirmation()
                         ->visible(fn(Invoice $record) => $record->status === 'out_for_delivery')
                         ->action(fn(Invoice $record) => $record->update(['status' => 'delivered'])),
+
+                    Tables\Actions\Action::make('cancel')
+                        ->label('Cancel Invoice')
+                        ->icon('heroicon-m-x-circle')
+                        ->color('danger')
+                        ->requiresConfirmation()
+                        ->visible(fn(Invoice $record) => in_array($record->status, ['draft', 'processing', 'out_for_delivery']))
+                        ->action(fn(Invoice $record) => $record->update(['status' => 'cancelled'])),
 
                     Tables\Actions\Action::make('print')
                         ->label('Print Invoice')

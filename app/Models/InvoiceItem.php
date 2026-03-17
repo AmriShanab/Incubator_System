@@ -6,10 +6,24 @@ use Illuminate\Database\Eloquent\Model;
 
 class InvoiceItem extends Model
 {
-    protected $fillable = ['invoice_id', 'sellable_type', 'sellable_id', 'quantity', 'unit_price', 'row_total'];
+    protected $fillable = [
+        'invoice_id',
+        'sellable_type',
+        'sellable_id',
+        'quantity',
+        'unit_price',
+        'unit_cost', // <--- Add this!
+        'row_total'
+    ];
 
-    public function invoice() { return $this->belongsTo(Invoice::class); }
-    
+    public function invoice()
+    {
+        return $this->belongsTo(Invoice::class);
+    }
+
     // The magic link to both tables
-    public function sellable() { return $this->morphTo(); }
+    public function sellable()
+    {
+        return $this->morphTo();
+    }
 }

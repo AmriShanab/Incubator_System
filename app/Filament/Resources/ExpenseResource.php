@@ -22,6 +22,11 @@ class ExpenseResource extends Resource
 
     protected static ?string $navigationGroup = 'Accounting';
 
+    public static function canViewAny(): bool
+    {
+        return \Illuminate\Support\Facades\Auth::user()?->role === 'admin';
+    }
+
     public static function form(Form $form): Form
     {
         return $form
@@ -89,7 +94,8 @@ class ExpenseResource extends Resource
             ->actions([
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make()
-                    ->modalDescription('Are you sure? Deleting this expense will refund the money back to the account balance.'),
+                    ->modalDescription('Are you sure? Deleting this expense will refund the money back to the account balance.')
+                    ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
             ]);
     }
 
