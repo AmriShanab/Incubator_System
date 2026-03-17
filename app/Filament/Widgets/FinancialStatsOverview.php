@@ -8,6 +8,7 @@ use Filament\Widgets\StatsOverviewWidget\Stat;
 
 class FinancialStatsOverview extends BaseWidget
 {
+    protected static bool $isLazy = false;
     protected int | string | array $columnSpan = 'full';
 
     protected function getStats(): array

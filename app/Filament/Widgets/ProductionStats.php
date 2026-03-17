@@ -11,6 +11,7 @@ use Illuminate\Support\Number;
 
 class ProductionStats extends BaseWidget
 {
+    protected static bool $isLazy = false;
     protected static ?string $pollingInterval = '15s';
 
     protected function getStats(): array

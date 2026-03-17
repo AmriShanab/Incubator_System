@@ -8,6 +8,7 @@ use Illuminate\Support\Carbon;
 
 class CashFlowChart extends ChartWidget
 {
+    protected static bool $isLazy = false;
     protected static ?string $heading = 'Monthly Cash Flow';
     
     // Sort order on the dashboard (higher number pushes it down)
