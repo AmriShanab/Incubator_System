@@ -15,7 +15,8 @@ class Invoice extends Model
         'total_cost',     // <--- Add this!
         'total_profit',   // <--- Add this!
         'payment_method',
-        'account_id'
+        'account_id',
+        'is_settled',     // <--- Add this!
     ];
     public function customer()
     {

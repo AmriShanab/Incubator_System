@@ -40,13 +40,13 @@ class AccountResource extends Resource
                     ->default(0.00)
                     ->prefix('LKR')
                     ->disabled('edit'),
-                    
+
                 Forms\Components\TextInput::make('capital_pool')
                     ->label('Investment Capital')
                     ->default(0.00)
                     ->prefix('LKR')
                     ->disabled('edit'),
-                    
+
                 Forms\Components\TextInput::make('profit_pool')
                     ->label('Free Profit')
                     ->default(0.00)
@@ -94,7 +94,7 @@ class AccountResource extends Resource
                     ->label('Settle COD')
                     ->icon('heroicon-m-arrows-right-left')
                     ->color('warning')
-                    ->visible(fn(Account $record) => $record->name === 'COD Partner' && $record->balance > 0)
+                    ->visible(fn(Account $record) => str_contains($record->name, 'COD Partner') && $record->balance > 0)
                     ->form([
                         Forms\Components\Select::make('destination_account_id')
                             ->label('Transfer To')
@@ -107,27 +107,58 @@ class AccountResource extends Resource
                             ->numeric()
                             ->default(fn(Account $record) => $record->balance)
                             ->maxValue(fn(Account $record) => $record->balance)
-                            ->required(),
+                            ->required()
+                            ->live(onBlur: true),
+
+                        // NEW: Explicitly define the product costs!
+                        Forms\Components\TextInput::make('capital_amount')
+                            ->label('Cost of Products (Goes to Capital)')
+                            ->helperText('How much did it cost you to build/buy these items? This money is protected for restocking.')
+                            ->numeric()
+                            ->default(0)
+                            ->required()
+                            ->live(onBlur: true),
 
                         Forms\Components\TextInput::make('courier_fee')
                             ->label('Courier Processing Fee (Deduction)')
                             ->numeric()
                             ->default(0)
                             ->required()
-                            ->helperText('This fee is an expense and will be deducted directly from your Free Profit pool.'),
+                            ->live(onBlur: true)
+                            ->helperText('This fee is deducted directly from your Free Profit.'),
+
+                        // NEW: Show the Admin exactly how much profit they are making in real-time
+                        Forms\Components\Placeholder::make('net_profit_preview')
+                            ->label('Net Profit (Added to Free Profit Pool)')
+                            ->content(function (Forms\Get $get) {
+                                $transfer = (float) $get('transfer_amount');
+                                $capital = (float) $get('capital_amount');
+                                $fee = (float) $get('courier_fee');
+
+                                // Profit = Total Money - Cost - Courier Fee
+                                $profit = $transfer - $capital - $fee;
+
+                                return 'LKR ' . number_format(max(0, $profit), 2);
+                            }),
                     ])
                     ->action(function (Account $record, array $data) {
                         $transferAmount = (float) $data['transfer_amount'];
+                        $capitalAmount = (float) $data['capital_amount']; // The explicitly defined cost
                         $courierFee = (float) $data['courier_fee'];
-                        $netAmount = $transferAmount - $courierFee;
+
+                        $netAmount = $transferAmount - $courierFee; // What hits the bank
+                        $profitAmount = $transferAmount - $capitalAmount - $courierFee; // What you take home
 
                         $destinationAccount = Account::find($data['destination_account_id']);
 
-                        DB::transaction(function () use ($record, $destinationAccount, $transferAmount, $courierFee, $netAmount) {
-                            $transferRatio = $record->balance > 0 ? ($transferAmount / $record->balance) : 0;
+                        DB::transaction(function () use ($record, $destinationAccount, $transferAmount, $capitalAmount, $courierFee, $netAmount, $profitAmount) {
 
-                            $capitalToMove = $record->capital_pool * $transferRatio;
-                            $profitToMove = $record->profit_pool * $transferRatio;
+                            // 1. Calculate how to safely zero out the COD holding account
+                            $transferRatio = $record->balance > 0 ? ($transferAmount / $record->balance) : 0;
+                            $codCapitalToDeduct = $record->capital_pool * $transferRatio;
+                            $codProfitToDeduct = $record->profit_pool * $transferRatio;
+
+                            // 2. Record the Courier Fee Expense
                             if ($courierFee > 0) {
                                 $record->transactions()->create([
                                     'type' => 'out',
@@ -138,6 +169,7 @@ class AccountResource extends Resource
                             }
 
                             if ($transferAmount > 0) {
+                                // 3. Deduct from COD Account
                                 $record->transactions()->create([
                                     'type' => 'out',
                                     'amount' => $netAmount,
@@ -146,9 +178,10 @@ class AccountResource extends Resource
                                 ]);
 
                                 $record->decrement('balance', $transferAmount);
-                                $record->decrement('capital_pool', $capitalToMove);
-                                $record->decrement('profit_pool', $profitToMove);
+                                $record->decrement('capital_pool', $codCapitalToDeduct);
+                                $record->decrement('profit_pool', $codProfitToDeduct);
 
+                                // 4. Add to Destination Bank (Using the exact Capital/Profit split you defined!)
                                 $destinationAccount->transactions()->create([
                                     'type' => 'in',
                                     'amount' => $netAmount,
@@ -157,8 +190,8 @@ class AccountResource extends Resource
                                 ]);
 
                                 $destinationAccount->increment('balance', $netAmount);
-                                $destinationAccount->increment('capital_pool', $capitalToMove);
-                                $destinationAccount->increment('profit_pool', $profitToMove - $courierFee);
+                                $destinationAccount->increment('capital_pool', $capitalAmount);
+                                $destinationAccount->increment('profit_pool', $profitAmount);
                             }
                         });
 

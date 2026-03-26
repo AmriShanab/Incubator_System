@@ -17,14 +17,14 @@ class PurchaseOrderResource extends Resource
     protected static ?string $model = PurchaseOrder::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-shopping-bag';
-    
+
     protected static ?string $navigationLabel = 'Purchase Orders';
 
     protected static ?string $navigationGroup = 'Supply Chain';
 
     public static function canViewAny(): bool
     {
-        return in_array(\Illuminate\Support\Facades\Auth::user()?->role, ['admin', 'inventory']);
+        return \Illuminate\Support\Facades\Auth::check() && in_array(\Illuminate\Support\Facades\Auth::user()->role, ['admin', 'inventory']);
     }
 
     public static function form(Form $form): Form
@@ -62,11 +62,13 @@ class PurchaseOrderResource extends Resource
                                             ->required()
                                             ->searchable()
                                             ->preload()
-                                            ->reactive()
-                                            ->afterStateUpdated(function ($state, Forms\Set $set) {
+                                            ->live() // Changed to live()
+                                            ->afterStateUpdated(function ($state, Forms\Set $set, Forms\Get $get) {
                                                 if ($state) {
                                                     $cost = Material::find($state)?->cost_per_unit ?? 0;
                                                     $set('unit_cost', $cost);
+                                                    // FIX: Auto-calculate the row total as soon as material is picked
+                                                    $set('row_total', $cost * (int)($get('quantity') ?? 1));
                                                 }
                                             })
                                             ->columnSpan(2),
@@ -76,18 +78,20 @@ class PurchaseOrderResource extends Resource
                                             ->required()
                                             ->label('Unit Cost')
                                             ->prefix('LKR')
-                                            ->reactive()
-                                            ->afterStateUpdated(fn ($state, Forms\Get $get, Forms\Set $set) =>
-                                                $set('row_total', (float)$state * (int)$get('quantity'))
+                                            ->live(onBlur: true) // Changed to live(onBlur: true)
+                                            ->afterStateUpdated(
+                                                fn($state, Forms\Get $get, Forms\Set $set) =>
+                                                $set('row_total', (float)($state ?? 0) * (int)($get('quantity') ?? 1))
                                             )->columnSpan(1),
 
                                         Forms\Components\TextInput::make('quantity')
                                             ->numeric()
                                             ->default(1)
                                             ->required()
-                                            ->reactive()
-                                            ->afterStateUpdated(fn ($state, Forms\Get $get, Forms\Set $set) =>
-                                                $set('row_total', (int)$state * (float)$get('unit_cost'))
+                                            ->live(onBlur: true) // Changed to live(onBlur: true)
+                                            ->afterStateUpdated(
+                                                fn($state, Forms\Get $get, Forms\Set $set) =>
+                                                $set('row_total', (int)($state ?? 1) * (float)($get('unit_cost') ?? 0))
                                             )->columnSpan(1),
 
                                         Forms\Components\TextInput::make('row_total')
@@ -99,12 +103,7 @@ class PurchaseOrderResource extends Resource
                                             ->columnSpan(1),
                                     ])
                                     ->columns(5)
-                                    ->live()
-                                    ->afterStateUpdated(function (Forms\Get $get, Forms\Set $set) {
-                                        $items = $get('items');
-                                        $total = collect($items)->sum(fn ($item) => (float)($item['row_total'] ?? 0));
-                                        $set('total_amount', $total);
-                                    }),
+                                    ->live() // Ensures adding/removing items triggers an update
                             ]),
                     ])->columnSpan(['lg' => 2]),
 
@@ -123,7 +122,19 @@ class PurchaseOrderResource extends Resource
                                     ->required()
                                     ->preload()
                                     ->searchable()
-                                    ->native(false),
+                                    ->native(false)
+                                    // ADD THIS NEW RULES BLOCK:
+                                    ->rules([
+                                        fn(Forms\Get $get): \Closure => function (string $attribute, $value, \Closure $fail) use ($get) {
+                                            $account = \App\Models\Account::find($value);
+                                            // Re-calculate the grand total to check against the bank balance
+                                            $totalAmount = collect($get('items'))->sum(fn($item) => (float) ($item['row_total'] ?? 0));
+
+                                            if ($account && $totalAmount > $account->balance) {
+                                                $fail("Insufficient funds. Order costs LKR " . number_format($totalAmount, 2) . " but account only has LKR " . number_format($account->balance, 2));
+                                            }
+                                        },
+                                    ]),
 
                                 Forms\Components\Select::make('status')
                                     ->options([
@@ -135,12 +146,21 @@ class PurchaseOrderResource extends Resource
                                     ->disabled()
                                     ->native(false),
 
+                                // FIX: Dynamically sum the totals directly in the placeholder
                                 Forms\Components\Placeholder::make('total_display')
                                     ->label('Grand Total')
-                                    ->content(fn(Forms\Get $get) => 'LKR ' . number_format($get('total_amount') ?? 0, 2))
-                                    ->extraAttributes(['class' => 'text-xl font-bold text-primary-600']),
+                                    ->content(function (Forms\Get $get) {
+                                        $total = collect($get('items'))->sum(fn($item) => (float) ($item['row_total'] ?? 0));
+                                        return 'LKR ' . number_format($total, 2);
+                                    })
+                                    ->extraAttributes(['class' => 'text-xl font-black text-primary-600']),
 
-                                Forms\Components\Hidden::make('total_amount')->default(0),
+                                // FIX: Make sure the exact same dynamic calculation saves to the database
+                                Forms\Components\Hidden::make('total_amount')
+                                    ->default(0)
+                                    ->dehydrateStateUsing(function (Forms\Get $get) {
+                                        return collect($get('items'))->sum(fn($item) => (float) ($item['row_total'] ?? 0));
+                                    }),
                             ]),
                     ])->columnSpan(['lg' => 1]),
             ])->columns(3);
@@ -156,11 +176,11 @@ class PurchaseOrderResource extends Resource
                     ->searchable()
                     ->weight('bold')
                     ->icon('heroicon-m-building-storefront')
-                    ->description(fn (PurchaseOrder $record): string => 'Ordered: ' . $record->order_date),
+                    ->description(fn(PurchaseOrder $record): string => 'Ordered: ' . $record->order_date),
 
                 Tables\Columns\TextColumn::make('status')
                     ->badge()
-                    ->color(fn (string $state): string => match ($state) {
+                    ->color(fn(string $state): string => match ($state) {
                         'ordered' => 'warning',
                         'received' => 'success',
                         default => 'gray',
@@ -183,18 +203,16 @@ class PurchaseOrderResource extends Resource
             ->defaultSort('created_at', 'desc')
             ->actions([
                 Tables\Actions\EditAction::make()
-                    // UI UPGRADE: Hide the edit button if the order is already locked in!
-                    ->visible(fn (PurchaseOrder $record) => $record->status === 'ordered'),
-                    
+                    ->visible(fn(PurchaseOrder $record) => $record->status === 'ordered'),
+
                 Tables\Actions\Action::make('receive')
                     ->label('Receive Goods')
                     ->icon('heroicon-m-arrow-down-tray')
                     ->color('success')
                     ->requiresConfirmation()
                     ->modalHeading('Receive Inventory?')
-                    // UI UPGRADE: Explicitly state it hits the Capital Pool
                     ->modalDescription('This will add these items to stock, update cost prices, and deduct money from your account\'s Investment Capital Pool.')
-                    ->visible(fn (PurchaseOrder $record) => $record->status === 'ordered')
+                    ->visible(fn(PurchaseOrder $record) => $record->status === 'ordered')
                     ->action(function (PurchaseOrder $record) {
                         foreach ($record->items as $item) {
                             $material = $item->material;

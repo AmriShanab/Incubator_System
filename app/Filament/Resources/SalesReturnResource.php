@@ -4,7 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\SalesReturnResource\Pages;
 use App\Models\SalesReturn;
-use App\Models\Transaction; // Needed for the ledger logging
+use App\Models\Transaction; 
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
@@ -25,7 +25,7 @@ class SalesReturnResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return in_array(\Illuminate\Support\Facades\Auth::user()?->role, ['admin', 'cashier']);
+        return \Illuminate\Support\Facades\Auth::check() && in_array(\Illuminate\Support\Facades\Auth::user()->role, ['admin', 'cashier']);
     }
 
     public static function form(Form $form): Form
@@ -82,7 +82,7 @@ class SalesReturnResource extends Resource
                                     ->numeric()
                                     ->prefix('LKR')
                                     ->required()
-                                    ->helperText('This amount will be deducted from the account that originally received the payment.'),
+                                    ->helperText('This amount will be automatically split and deducted from the Capital and Profit pools of the account that originally received the payment.'),
                             ]),
                     ])->columnSpan(['lg' => 1]),
             ])->columns(3);
@@ -134,38 +134,62 @@ class SalesReturnResource extends Resource
                     ->color('success')
                     ->requiresConfirmation()
                     ->modalHeading('Process Return & Refund?')
-                    ->modalDescription('This will restock the inventory AND deduct the refund amount from your financial ledger. This action cannot be undone.')
+                    ->modalDescription('This will restock the inventory AND accurately deduct the capital and profit margins from the linked account. This action cannot be undone.')
                     ->visible(fn($record) => $record->status === 'pending')
                     ->action(function ($record) {
                         
                         DB::transaction(function () use ($record) {
                             $invoice = $record->invoice;
-                            $refundAmount = $record->refund_amount;
+                            $refundAmount = (float) $record->refund_amount;
 
-                            // 1. PUT THE ITEMS BACK IN STOCK
+                            // 1. PUT THE ITEMS BACK IN STOCK AND CALCULATE EXACT CAPITAL COST
+                            $totalCapitalCost = 0;
+
                             foreach ($invoice->items as $item) {
                                 $product = $item->sellable;
+                                
                                 if ($product) {
+                                    // Restock
                                     $product->increment('current_stock', $item->quantity);
                                 }
+
+                                // We saved the exact unit_cost when we made the invoice! 
+                                // Multiply it by quantity to find exactly how much this item cost us to build.
+                                $totalCapitalCost += ((float) ($item->unit_cost ?? 0)) * $item->quantity;
                             }
 
                             // 2. DEDUCT THE MONEY FROM THE LEDGER (If an account is linked)
                             if ($invoice->account_id && $refundAmount > 0) {
                                 
+                                $account = $invoice->account;
+
+                                // The profit we are losing is the total refund minus the cost of the goods
+                                $profitToDeduct = $refundAmount - $totalCapitalCost;
+
+                                // Prevent negative profit deductions just in case of weird manual overrides
+                                if ($profitToDeduct < 0) {
+                                    $profitToDeduct = 0;
+                                }
+
                                 // Create the ledger entry
                                 Transaction::create([
                                     'account_id' => $invoice->account_id,
                                     'type' => 'out',
                                     'amount' => $refundAmount,
-                                    'description' => "Refund issued for INV-{$invoice->id}. Reason: {$record->reason}",
+                                    'description' => "Refund issued for INV-{$invoice->id}. Capital: LKR {$totalCapitalCost}, Profit: LKR {$profitToDeduct}",
                                     'reference_type' => SalesReturn::class,
                                     'reference_id' => $record->id,
                                     'transaction_date' => now(),
                                 ]);
 
-                                // Deduct from the actual Wallet balance
-                                $invoice->account->decrement('balance', $refundAmount);
+                                // A. Deduct from the overall Wallet balance
+                                $account->decrement('balance', $refundAmount);
+                                
+                                // B. Accurately remove the protected Capital money
+                                $account->decrement('capital_pool', $totalCapitalCost);
+                                
+                                // C. Accurately remove the lost markup from the Free Profit
+                                $account->decrement('profit_pool', $profitToDeduct);
                             }
 
                             // 3. MARK AS COMPLETED
@@ -174,7 +198,7 @@ class SalesReturnResource extends Resource
 
                         Notification::make()
                             ->title('Refund Processed')
-                            ->body('Inventory restocked and funds deducted from ledger.')
+                            ->body('Inventory restocked and Capital/Profit pools correctly adjusted.')
                             ->success()
                             ->send();
                     }),
@@ -182,7 +206,7 @@ class SalesReturnResource extends Resource
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\DeleteBulkAction::make()
-                        ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
+                        ->visible(fn () => \Illuminate\Support\Facades\Auth::check() && \Illuminate\Support\Facades\Auth::user()->role === 'admin'),
                 ]),
             ]);
     }

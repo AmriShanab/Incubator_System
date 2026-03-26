@@ -107,12 +107,18 @@ class InvoiceResource extends Resource
                                             ->required()
                                             ->columnSpan(1)
                                             ->live(onBlur: true)
-                                            ->afterStateUpdated(function ($state, Forms\Get $get, Forms\Set $set) {
-                                                $set('row_total', (int)$state * (float)$get('unit_price'));
-                                                // Force Grand Total Update
-                                                $total = collect($get('../../items'))->sum(fn($item) => (float)($item['row_total'] ?? 0));
-                                                $set('../../total_amount', $total);
-                                            }),
+                                            ->rules([
+                                                fn(Forms\Get $get): \Closure => function (string $attribute, $value, \Closure $fail) use ($get) {
+                                                    $type = $get('sellable_type');
+                                                    $id = $get('sellable_id');
+                                                    if ($type && $id) {
+                                                        $product = $type::find($id);
+                                                        if ($product && $value > $product->current_stock) {
+                                                            $fail("Out of stock! Only {$product->current_stock} available.");
+                                                        }
+                                                    }
+                                                },
+                                            ]),
 
                                         Forms\Components\TextInput::make('row_total')
                                             ->label('Subtotal')

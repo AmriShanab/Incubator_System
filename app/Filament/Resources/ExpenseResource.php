@@ -51,12 +51,23 @@ class ExpenseResource extends Resource
                             ])
                             ->required()
                             ->searchable(),
-
                         Forms\Components\TextInput::make('amount')
                             ->numeric()
                             ->required()
                             ->prefix('LKR')
-                            ->disabledOn('edit'), // Lock after creation for ledger safety
+                            ->disabledOn('edit')
+                            // ADD THIS NEW RULES BLOCK:
+                            ->rules([
+                                fn(Forms\Get $get): \Closure => function (string $attribute, $value, \Closure $fail) use ($get) {
+                                    $accountId = $get('account_id');
+                                    if ($accountId) {
+                                        $account = \App\Models\Account::find($accountId);
+                                        if ($account && $value > $account->balance) {
+                                            $fail("Insufficient funds. This account only has LKR " . number_format($account->balance, 2));
+                                        }
+                                    }
+                                },
+                            ]),
 
                         Forms\Components\DatePicker::make('expense_date')
                             ->required()
@@ -95,7 +106,7 @@ class ExpenseResource extends Resource
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make()
                     ->modalDescription('Are you sure? Deleting this expense will refund the money back to the account balance.')
-                    ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
+                    ->visible(fn() => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
             ]);
     }
 
