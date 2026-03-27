@@ -11,9 +11,19 @@ use App\Models\Invoice;
 use Illuminate\Support\Facades\DB;
 use Filament\Notifications\Notification;
 use Filament\Support\Enums\MaxWidth;
+use Filament\Actions\Action;
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Textarea;
+use Filament\Actions\Concerns\InteractsWithActions;
+use Filament\Actions\Contracts\HasActions;
+use Filament\Forms\Concerns\InteractsWithForms;
+use Filament\Forms\Contracts\HasForms;
 
-class PosTerminal extends Page
+class PosTerminal extends Page implements HasForms, HasActions
 {
+    use InteractsWithForms;
+    use InteractsWithActions;
+
     protected static ?string $navigationIcon = 'heroicon-o-computer-desktop';
     protected static ?string $navigationLabel = 'POS Terminal';
     protected static ?string $navigationGroup = 'Sales';
@@ -23,7 +33,7 @@ class PosTerminal extends Page
 
     // POS State
     public $search = '';
-    public $activeCategory = 'all'; 
+    public $activeCategory = 'all';
     public $cart = [];
     public $grandTotal = 0;
     public $customerId;
@@ -36,13 +46,54 @@ class PosTerminal extends Page
 
     public function mount(): void
     {
+        $this->loadCustomers();
+    }
+
+    public function loadCustomers()
+    {
         $walkIn = Customer::firstOrCreate(
             ['phone' => '0000000000'],
             ['name' => 'Walk-in Customer', 'address' => 'Store Front']
         );
 
-        $this->customerId = $walkIn->id;
         $this->customers = Customer::pluck('name', 'id')->toArray();
+        
+        // Ensure customerId is set, defaulting to walk-in if currently empty
+        if (!$this->customerId) {
+            $this->customerId = $walkIn->id;
+        }
+    }
+
+    // Action to create a new customer via a modal
+    public function createCustomerAction(): Action
+    {
+        return Action::make('createCustomer')
+            ->label('New')
+            ->icon('heroicon-m-plus')
+            ->color('primary')
+            ->form([
+                TextInput::make('name')
+                    ->required()
+                    ->maxLength(255),
+                TextInput::make('phone')
+                    ->tel()
+                    ->required()
+                    ->maxLength(255),
+                Textarea::make('address')
+                    ->maxLength(65535),
+            ])
+            ->action(function (array $data) {
+                $customer = Customer::create($data);
+                
+                // Reload the dropdown list and select the newly created customer
+                $this->loadCustomers();
+                $this->customerId = $customer->id;
+
+                Notification::make()
+                    ->title('Customer created successfully')
+                    ->success()
+                    ->send();
+            });
     }
 
     public function getCategoriesProperty()
@@ -57,7 +108,7 @@ class PosTerminal extends Page
         foreach ($accessoryCategories as $cat) {
             $categories[] = [
                 'id' => $cat,
-                'name' => ucwords(str_replace('_', ' ', $cat)), 
+                'name' => ucwords(str_replace('_', ' ', $cat)),
                 'icon' => 'heroicon-o-tag',
                 'color' => 'success',
             ];
@@ -194,7 +245,7 @@ class PosTerminal extends Page
     public function removeFromCart($key)
     {
         if (!isset($this->cart[$key])) {
-            return; 
+            return;
         }
 
         unset($this->cart[$key]);
@@ -215,8 +266,9 @@ class PosTerminal extends Page
 
         $cashAccount = Account::where('name', 'Cash')->first();
 
-        DB::transaction(function () use ($cashAccount) {
-            $invoice = Invoice::create([
+        $invoice = DB::transaction(function () use ($cashAccount) {
+
+            $createdInvoice = Invoice::create([
                 'customer_id' => $this->customerId,
                 'invoice_date' => now(),
                 'status' => 'draft',
@@ -226,7 +278,7 @@ class PosTerminal extends Page
             ]);
 
             foreach ($this->cart as $item) {
-                $invoice->items()->create([
+                $createdInvoice->items()->create([
                     'sellable_type' => $item['type'],
                     'sellable_id' => $item['id'],
                     'quantity' => $item['quantity'],
@@ -241,14 +293,18 @@ class PosTerminal extends Page
                 }
             }
 
-            $invoice->update(['status' => 'delivered']);
+            $createdInvoice->update(['status' => 'delivered']);
+
+            return $createdInvoice;
         });
 
         Notification::make()->title('Sale Completed!')->success()->send();
 
+        $this->dispatch('print-receipt', ['invoiceId' => $invoice->id]);
+
         $this->cart = [];
         $this->grandTotal = 0;
         $this->search = '';
-        $this->activeCategory = 'all'; 
+        $this->activeCategory = 'all';
     }
 }

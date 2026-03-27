@@ -11,3 +11,9 @@ Route::get('/invoice/{invoice}/print', function (Invoice $invoice) {
     $invoice->load(['customer', 'items.sellable']);
     return view('invoice.print', compact('invoice'));
 })->name('invoice.print');
+
+
+Route::get('/pos/receipt/{invoice}', function (Invoice $invoice) {
+    $invoice->load('items');
+    return view('pos.receipt', compact('invoice'));
+})->name('pos.receipt');

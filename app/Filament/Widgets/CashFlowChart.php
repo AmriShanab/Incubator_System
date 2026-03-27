@@ -5,6 +5,7 @@ namespace App\Filament\Widgets;
 use App\Models\Transaction;
 use Filament\Widgets\ChartWidget;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Auth;
 
 class CashFlowChart extends ChartWidget
 {
@@ -13,6 +14,11 @@ class CashFlowChart extends ChartWidget
     
     // Sort order on the dashboard (higher number pushes it down)
     protected static ?int $sort = 2;
+
+    public static function canView(): bool
+    {
+        return Auth::user() && in_array(Auth::user()->role, ['admin']);
+    }
 
     protected function getData(): array
     {

@@ -5,12 +5,17 @@ namespace App\Filament\Widgets;
 use App\Models\Transaction;
 use Filament\Widgets\StatsOverviewWidget as BaseWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
+use Illuminate\Support\Facades\Auth;
 
 class FinancialStatsOverview extends BaseWidget
 {
     protected static bool $isLazy = false;
     protected int | string | array $columnSpan = 'full';
 
+    public static function canView(): bool
+    {
+        return Auth::user() && in_array(Auth::user()->role, ['admin']);
+    }
     protected function getStats(): array
     {
         // Calculate all money IN (Invoices & Settlements)
