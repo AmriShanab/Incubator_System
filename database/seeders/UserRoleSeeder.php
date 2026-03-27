@@ -25,7 +25,6 @@ class UserRoleSeeder extends Seeder
             ]
         );
 
-        // 3. The Inventory Clerk (Warehouse)
         User::updateOrCreate(
             ['email' => 'inventory@test.com'],
             [
