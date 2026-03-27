@@ -3,7 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\AccountResource\Pages;
-use App\Filament\Resources\AccountResource\RelationManagers; // <-- ADDED THIS LINE
+use App\Filament\Resources\AccountResource\RelationManagers;
 use App\Models\Account;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -63,7 +63,6 @@ class AccountResource extends Resource
                     ->searchable()
                     ->weight('bold'),
 
-                // The physical money in the drawer/bank
                 Tables\Columns\TextColumn::make('balance')
                     ->label('Total Physical Balance')
                     ->money('LKR')
@@ -71,14 +70,12 @@ class AccountResource extends Resource
                     ->color('primary')
                     ->weight('bold'),
 
-                // The money strictly for buying stock
                 Tables\Columns\TextColumn::make('capital_pool')
                     ->label('Investment / Capital')
                     ->money('LKR')
                     ->color('warning')
                     ->description('Reserved for materials'),
 
-                // The money they can safely take home!
                 Tables\Columns\TextColumn::make('profit_pool')
                     ->label('Free Profit')
                     ->money('LKR')
@@ -89,35 +86,68 @@ class AccountResource extends Resource
             ->actions([
                 Tables\Actions\EditAction::make(),
 
-                // THE SETTLEMENT ACTION
+                // THE NEW INVOICE-AWARE SETTLEMENT ACTION
                 Tables\Actions\Action::make('settle_funds')
                     ->label('Settle COD')
                     ->icon('heroicon-m-arrows-right-left')
                     ->color('warning')
-                    ->visible(fn(Account $record) => str_contains($record->name, 'COD Partner') && $record->balance > 0)
+                    ->visible(fn(Account $record) => str_contains(strtolower($record->name), 'cod') && $record->balance > 0)
+                    ->modalWidth('2xl')
                     ->form([
                         Forms\Components\Select::make('destination_account_id')
-                            ->label('Transfer To')
-                            ->options(Account::where('name', '!=', 'COD Partner')->pluck('name', 'id'))
+                            ->label('Transfer To (Bank/Cash)')
+                            // FIXED OPTIONS QUERY
+                            ->options(fn (Account $record) => Account::where('id', '!=', $record->id)->pluck('name', 'id')->toArray())
                             ->required()
                             ->default(fn() => Account::where('name', 'Bank')->first()?->id),
 
-                        Forms\Components\TextInput::make('transfer_amount')
-                            ->label('Total COD Amount Collected')
-                            ->numeric()
-                            ->default(fn(Account $record) => $record->balance)
-                            ->maxValue(fn(Account $record) => $record->balance)
+                        Forms\Components\CheckboxList::make('settlement_invoices')
+                            ->label('Select Invoices being Settled')
+                            ->helperText('Check the invoices shown on your courier remittance slip.')
+                            ->options(function (Account $record) {
+                                return \App\Models\Invoice::where('account_id', $record->id)
+                                    ->where('is_settled', 0)
+                                    ->get()
+                                    ->mapWithKeys(function ($invoice) {
+                                        $label = "INV-" . str_pad($invoice->id, 5, '0', STR_PAD_LEFT) . " | Date: " . $invoice->invoice_date . " | LKR " . number_format($invoice->total_amount, 2);
+                                        return [$invoice->id => $label];
+                                    });
+                            })
                             ->required()
-                            ->live(onBlur: true),
+                            ->columns(1)
+                            ->live() 
+                            ->afterStateUpdated(function (Forms\Get $get, Forms\Set $set) {
+                                $selectedIds = $get('settlement_invoices') ?? [];
 
-                        // NEW: Explicitly define the product costs!
-                        Forms\Components\TextInput::make('capital_amount')
-                            ->label('Cost of Products (Goes to Capital)')
-                            ->helperText('How much did it cost you to build/buy these items? This money is protected for restocking.')
-                            ->numeric()
-                            ->default(0)
-                            ->required()
-                            ->live(onBlur: true),
+                                if (empty($selectedIds)) {
+                                    $set('transfer_amount', 0);
+                                    $set('capital_amount', 0);
+                                    return;
+                                }
+
+                                $totals = \App\Models\Invoice::whereIn('id', $selectedIds)
+                                    ->selectRaw('SUM(total_amount) as sum_amount, SUM(total_cost) as sum_cost')
+                                    ->first();
+
+                                $set('transfer_amount', $totals->sum_amount ?? 0);
+                                $set('capital_amount', $totals->sum_cost ?? 0);
+                            }),
+
+                        Forms\Components\Grid::make(2)->schema([
+                            Forms\Components\TextInput::make('transfer_amount')
+                                ->label('Total Collected Amount')
+                                ->numeric()
+                                ->readOnly() 
+                                ->prefix('LKR')
+                                ->default(0),
+
+                            Forms\Components\TextInput::make('capital_amount')
+                                ->label('Total Cost (Capital)')
+                                ->numeric()
+                                ->readOnly() 
+                                ->prefix('LKR')
+                                ->default(0),
+                        ]),
 
                         Forms\Components\TextInput::make('courier_fee')
                             ->label('Courier Processing Fee (Deduction)')
@@ -127,38 +157,34 @@ class AccountResource extends Resource
                             ->live(onBlur: true)
                             ->helperText('This fee is deducted directly from your Free Profit.'),
 
-                        // NEW: Show the Admin exactly how much profit they are making in real-time
                         Forms\Components\Placeholder::make('net_profit_preview')
                             ->label('Net Profit (Added to Free Profit Pool)')
                             ->content(function (Forms\Get $get) {
                                 $transfer = (float) $get('transfer_amount');
-                                $capital = (float) $get('capital_amount');
-                                $fee = (float) $get('courier_fee');
+                                $capital  = (float) $get('capital_amount');
+                                $fee      = (float) $get('courier_fee');
 
-                                // Profit = Total Money - Cost - Courier Fee
                                 $profit = $transfer - $capital - $fee;
-
                                 return 'LKR ' . number_format(max(0, $profit), 2);
                             }),
                     ])
                     ->action(function (Account $record, array $data) {
+                        $selectedInvoiceIds = $data['settlement_invoices'];
                         $transferAmount = (float) $data['transfer_amount'];
-                        $capitalAmount = (float) $data['capital_amount']; // The explicitly defined cost
+                        $capitalAmount = (float) $data['capital_amount'];
                         $courierFee = (float) $data['courier_fee'];
 
-                        $netAmount = $transferAmount - $courierFee; // What hits the bank
-                        $profitAmount = $transferAmount - $capitalAmount - $courierFee; // What you take home
+                        $netAmount = $transferAmount - $courierFee; 
+                        $profitAmount = $transferAmount - $capitalAmount - $courierFee; 
 
                         $destinationAccount = Account::find($data['destination_account_id']);
 
-                        DB::transaction(function () use ($record, $destinationAccount, $transferAmount, $capitalAmount, $courierFee, $netAmount, $profitAmount) {
+                        DB::transaction(function () use ($record, $destinationAccount, $transferAmount, $capitalAmount, $courierFee, $netAmount, $profitAmount, $selectedInvoiceIds) {
 
-                            // 1. Calculate how to safely zero out the COD holding account
-                            $transferRatio = $record->balance > 0 ? ($transferAmount / $record->balance) : 0;
-                            $codCapitalToDeduct = $record->capital_pool * $transferRatio;
-                            $codProfitToDeduct = $record->profit_pool * $transferRatio;
+                            $record->decrement('balance', $transferAmount);
+                            $record->decrement('capital_pool', $capitalAmount);
+                            $record->decrement('profit_pool', ($transferAmount - $capitalAmount));
 
-                            // 2. Record the Courier Fee Expense
                             if ($courierFee > 0) {
                                 $record->transactions()->create([
                                     'type' => 'out',
@@ -169,7 +195,6 @@ class AccountResource extends Resource
                             }
 
                             if ($transferAmount > 0) {
-                                // 3. Deduct from COD Account
                                 $record->transactions()->create([
                                     'type' => 'out',
                                     'amount' => $netAmount,
@@ -177,11 +202,6 @@ class AccountResource extends Resource
                                     'transaction_date' => now(),
                                 ]);
 
-                                $record->decrement('balance', $transferAmount);
-                                $record->decrement('capital_pool', $codCapitalToDeduct);
-                                $record->decrement('profit_pool', $codProfitToDeduct);
-
-                                // 4. Add to Destination Bank (Using the exact Capital/Profit split you defined!)
                                 $destinationAccount->transactions()->create([
                                     'type' => 'in',
                                     'amount' => $netAmount,
@@ -191,14 +211,18 @@ class AccountResource extends Resource
 
                                 $destinationAccount->increment('balance', $netAmount);
                                 $destinationAccount->increment('capital_pool', $capitalAmount);
-                                $destinationAccount->increment('profit_pool', $profitAmount);
+                                $destinationAccount->increment('profit_pool', max(0, $profitAmount));
                             }
+
+                            \App\Models\Invoice::whereIn('id', $selectedInvoiceIds)->update([
+                                'is_settled' => 1
+                            ]);
                         });
 
                         Notification::make()
                             ->success()
                             ->title('Settlement Complete')
-                            ->body("Successfully deposited LKR " . number_format($netAmount, 2) . " into {$destinationAccount->name}.")
+                            ->body("Successfully settled " . count($selectedInvoiceIds) . " invoices. Deposited LKR " . number_format($netAmount, 2) . " into {$destinationAccount->name}.")
                             ->send();
                     }),
 
