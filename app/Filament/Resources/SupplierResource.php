@@ -48,6 +48,22 @@ class SupplierResource extends Resource
                                     ->placeholder('e.g., John Doe')
                                     ->prefixIcon('heroicon-m-user')
                                     ->columnSpanFull(),
+
+                                // NEW: Hybrid Category Field
+                                Forms\Components\TextInput::make('category')
+                                    ->maxLength(255)
+                                    ->label('Supplier Category')
+                                    ->placeholder('Select an existing category or type a new one...')
+                                    ->prefixIcon('heroicon-m-tag')
+                                    ->datalist(function () {
+                                        // Fetches all unique, existing categories from the DB
+                                        return Supplier::query()
+                                            ->whereNotNull('category')
+                                            ->distinct()
+                                            ->pluck('category')
+                                            ->toArray();
+                                    })
+                                    ->columnSpanFull(),
                             ]),
                     ])->columnSpan(['lg' => 2]),
 
@@ -83,8 +99,15 @@ class SupplierResource extends Resource
                     ->sortable()
                     ->weight('bold')
                     ->icon('heroicon-m-building-storefront')
-                    // Show the contact person right underneath the company name
                     ->description(fn (Supplier $record): string => 'Contact: ' . ($record->contact_person ?? 'N/A')),
+
+                // NEW: Added Category to the table view
+                Tables\Columns\TextColumn::make('category')
+                    ->label('Category')
+                    ->badge()
+                    ->color('warning')
+                    ->searchable()
+                    ->sortable(),
 
                 Tables\Columns\TextColumn::make('phone')
                     ->icon('heroicon-m-phone')
@@ -98,7 +121,6 @@ class SupplierResource extends Resource
                     ->copyMessage('Email address copied')
                     ->searchable(),
 
-                // Premium Feature: Total Purchase Orders Counter
                 Tables\Columns\TextColumn::make('purchase_orders_count')
                     ->counts('purchaseOrders')
                     ->label('Total Orders')
@@ -116,7 +138,6 @@ class SupplierResource extends Resource
             ->actions([
                 Tables\Actions\EditAction::make(),
                 
-                // Quick Action: Send an Email directly from the table
                 Tables\Actions\Action::make('email_supplier')
                     ->label('Email')
                     ->icon('heroicon-m-envelope')
