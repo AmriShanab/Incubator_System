@@ -96,7 +96,6 @@ class AccountResource extends Resource
                     ->form([
                         Forms\Components\Select::make('destination_account_id')
                             ->label('Transfer To (Bank/Cash)')
-                            // FIXED OPTIONS QUERY
                             ->options(fn (Account $record) => Account::where('id', '!=', $record->id)->pluck('name', 'id')->toArray())
                             ->required()
                             ->default(fn() => Account::where('name', 'Bank')->first()?->id),
@@ -110,11 +109,12 @@ class AccountResource extends Resource
                                     ->get()
                                     ->mapWithKeys(function ($invoice) {
                                         $label = "INV-" . str_pad($invoice->id, 5, '0', STR_PAD_LEFT) . " | Date: " . $invoice->invoice_date . " | LKR " . number_format($invoice->total_amount, 2);
-                                        return [$invoice->id => $label];
+                                        return [(string) $invoice->id => $label];
                                     });
                             })
                             ->required()
                             ->columns(1)
+                            ->bulkToggleable() // <--- THIS ADDS THE NATIVE SELECT ALL / DESELECT ALL BUTTONS
                             ->live() 
                             ->afterStateUpdated(function (Forms\Get $get, Forms\Set $set) {
                                 $selectedIds = $get('settlement_invoices') ?? [];
