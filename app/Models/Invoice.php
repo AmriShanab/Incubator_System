@@ -11,13 +11,17 @@ class Invoice extends Model
         'customer_id',
         'invoice_date',
         'status',
+        'tracking_number',
         'total_amount',
-        'total_cost',     // <--- Add this!
-        'total_profit',   // <--- Add this!
+        'total_cost',     
+        'total_profit',   
         'payment_method',
         'account_id',
-        'is_settled',     // <--- Add this!
+        'is_settled',
+        'amount_paid',
+        'payment_status',   
     ];
+
     public function customer()
     {
         return $this->belongsTo(Customer::class);
@@ -67,20 +71,61 @@ class Invoice extends Model
                     'total_profit' => $totalProfit,
                 ]);
 
-                if ($invoice->account_id && $invoice->total_amount > 0 && !$invoice->transactions()->exists()) {
+                // PHASE 3: SPLIT PAYMENT LOGIC
+                if ($invoice->total_amount > 0 && !$invoice->transactions()->exists()) {
 
                     DB::transaction(function () use ($invoice, $totalCost, $totalProfit) {
-                        $invoice->transactions()->create([
-                            'account_id' => $invoice->account_id,
-                            'type' => 'in',
-                            'amount' => $invoice->total_amount,
-                            'description' => "Payment received for Invoice #{$invoice->id}",
-                            'transaction_date' => now()->toDateString(),
-                        ]);
+                        
+                        $amountPaid = (float) $invoice->amount_paid;
+                        $dueAmount = max(0, (float) $invoice->total_amount - $amountPaid);
 
-                        $invoice->account->increment('balance', $invoice->total_amount);
-                        $invoice->account->increment('capital_pool', $totalCost); // FIXED SPELLING HERE
-                        $invoice->account->increment('profit_pool', $totalProfit);
+                        // --- 1. CASH/BANK LOGIC (Money actually received today) ---
+                        if ($amountPaid > 0 && $invoice->account_id) {
+                            
+                            // "Capital First" Allocation: Prioritize recovering costs before declaring profit
+                            $cashCapital = min($amountPaid, $totalCost);
+                            $cashProfit = max(0, $amountPaid - $totalCost);
+
+                            $invoice->transactions()->create([
+                                'account_id' => $invoice->account_id,
+                                'type' => 'in',
+                                'amount' => $amountPaid,
+                                'description' => "Partial/Full payment received for Invoice #{$invoice->id}",
+                                'transaction_date' => now()->toDateString(),
+                            ]);
+
+                            $invoice->account->increment('balance', $amountPaid);
+                            $invoice->account->increment('capital_pool', $cashCapital); 
+                            $invoice->account->increment('profit_pool', $cashProfit);
+                        }
+
+                        // --- 2. ACCOUNTS RECEIVABLE LOGIC (Money owed as credit) ---
+                        if ($dueAmount > 0) {
+                            // Automatically find or create the AR account so the system never crashes
+                            $arAccount = Account::firstOrCreate(
+                                ['name' => 'Accounts Receivable'],
+                                ['balance' => 0, 'capital_pool' => 0, 'profit_pool' => 0]
+                            );
+
+                            // Calculate how much capital and profit is locked inside this customer debt
+                            $cashCapital = min($amountPaid, $totalCost); 
+                            $cashProfit = max(0, $amountPaid - $totalCost);
+                            
+                            $arCapital = max(0, $totalCost - $cashCapital); 
+                            $arProfit = max(0, $totalProfit - $cashProfit); 
+
+                            $invoice->transactions()->create([
+                                'account_id' => $arAccount->id,
+                                'type' => 'in',
+                                'amount' => $dueAmount,
+                                'description' => "Credit issued for Invoice #{$invoice->id}",
+                                'transaction_date' => now()->toDateString(),
+                            ]);
+
+                            $arAccount->increment('balance', $dueAmount);
+                            $arAccount->increment('capital_pool', $arCapital);
+                            $arAccount->increment('profit_pool', $arProfit);
+                        }
                     });
                 }
             }

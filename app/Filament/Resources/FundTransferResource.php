@@ -19,9 +19,9 @@ class FundTransferResource extends Resource
     protected static ?string $model = FundTransfer::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-arrows-right-left';
-    
+
     protected static ?string $navigationGroup = 'Accounting';
-    
+
     protected static ?string $navigationLabel = 'Fund Transfers';
 
     // RBAC: STRICTLY ADMIN ONLY
@@ -59,7 +59,7 @@ class FundTransferResource extends Resource
                     ->hint(function (Get $get) {
                         $accountId = $get('from_account_id');
                         if (!$accountId) return null;
-                        
+
                         $account = Account::find($accountId);
                         return $account ? 'Available: LKR ' . number_format($account->balance, 2) : null;
                     })
@@ -79,7 +79,7 @@ class FundTransferResource extends Resource
                     ->hint(function (Get $get) {
                         $accountId = $get('to_account_id');
                         if (!$accountId) return null;
-                        
+
                         $account = Account::find($accountId);
                         return $account ? 'Current Balance: LKR ' . number_format($account->balance, 2) : null;
                     })
@@ -90,15 +90,25 @@ class FundTransferResource extends Resource
                     ->numeric()
                     ->prefix('LKR')
                     ->minValue(1)
-                    // BONUS: Prevent transferring more money than the source account actually has!
-                    ->maxValue(function (Get $get) {
-                        $sourceAccountId = $get('from_account_id');
-                        if ($sourceAccountId) {
-                            $account = Account::find($sourceAccountId);
-                            return $account ? $account->balance : null;
-                        }
-                        return null;
-                    })
+                    ->rules([
+                        fn(Get $get): \Closure => function (string $attribute, $value, \Closure $fail) use ($get) {
+                            $sourceAccountId = $get('from_account_id');
+                            $poolType = $get('pool_type');
+
+                            if ($sourceAccountId && $poolType) {
+                                $account = Account::find($sourceAccountId);
+
+                                if ($account) {
+                                    // Check the exact pool they are trying to pull money from
+                                    $maxAvailable = $poolType === 'profit' ? $account->profit_pool : $account->capital_pool;
+
+                                    if ((float) $value > (float) $maxAvailable) {
+                                        $fail("Insufficient funds! You only have LKR " . number_format($maxAvailable, 2) . " available in the selected pool.");
+                                    }
+                                }
+                            }
+                        },
+                    ])
                     ->columnSpanFull(),
 
                 // ADDED: The Pool Type Selection
@@ -110,7 +120,21 @@ class FundTransferResource extends Resource
                     ])
                     ->required()
                     ->default('capital')
-                    ->helperText('Which pool is this money being transferred from?')
+                    ->live() // <-- This ensures the form reacts when they change the pool type
+                    ->hint(function (Get $get) {
+                        $accountId = $get('from_account_id');
+                        $poolType = $get('pool_type');
+
+                        if (!$accountId || !$poolType) return null;
+
+                        $account = Account::find($accountId);
+                        if ($account) {
+                            $available = $poolType === 'profit' ? $account->profit_pool : $account->capital_pool;
+                            return "Pool Balance: LKR " . number_format($available, 2);
+                        }
+                        return null;
+                    })
+                    ->hintColor('warning')
                     ->columnSpanFull(),
 
                 Forms\Components\Textarea::make('reference_note')
@@ -123,7 +147,7 @@ class FundTransferResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(fn ($query) => $query->with(['fromAccount', 'toAccount']))
+            ->modifyQueryUsing(fn($query) => $query->with(['fromAccount', 'toAccount']))
             ->columns([
                 Tables\Columns\TextColumn::make('transfer_date')
                     ->date()
@@ -150,12 +174,12 @@ class FundTransferResource extends Resource
                 Tables\Columns\TextColumn::make('pool_type')
                     ->label('Fund Type')
                     ->badge()
-                    ->color(fn (string $state): string => match ($state) {
+                    ->color(fn(string $state): string => match ($state) {
                         'profit' => 'success',
                         'capital' => 'info',
                         default => 'gray',
                     })
-                    ->formatStateUsing(fn (string $state) => ucfirst($state)),
+                    ->formatStateUsing(fn(string $state) => ucfirst($state)),
 
                 Tables\Columns\TextColumn::make('reference_note')
                     ->label('Note')

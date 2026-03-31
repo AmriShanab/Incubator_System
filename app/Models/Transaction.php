@@ -15,7 +15,8 @@ class Transaction extends Model
         'description',
         'reference_type',
         'reference_id',
-        'transaction_date'
+        'transaction_date',
+        'invoice_id', 
     ];
 
     public function account() : BelongsTo
@@ -26,5 +27,10 @@ class Transaction extends Model
     public function reference() : MorphTo
     {
         return $this->morphTo();
+    }
+
+    public function Invoice()
+    {
+        return $this->belongsTo(Invoice::class);
     }
 }

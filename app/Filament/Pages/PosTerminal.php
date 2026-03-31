@@ -24,20 +24,37 @@ class PosTerminal extends Page implements HasForms, HasActions
     use InteractsWithForms;
     use InteractsWithActions;
 
-    protected static ?string $navigationIcon = 'heroicon-o-computer-desktop';
+    protected static ?string $navigationIcon  = 'heroicon-o-computer-desktop';
     protected static ?string $navigationLabel = 'POS Terminal';
     protected static ?string $navigationGroup = 'Sales';
-    protected static ?int $navigationSort = 0;
+    protected static ?int    $navigationSort  = 0;
 
     protected static string $view = 'filament.pages.pos-terminal';
 
-    // POS State
-    public $search = '';
-    public $activeCategory = 'all';
-    public $cart = [];
-    public $grandTotal = 0;
-    public $customerId;
-    public $customers = [];
+    // ── Product browser state ──────────────────────────────────
+    public string $search        = '';
+    public string $activeCategory = 'all';
+
+    // ── Cart ──────────────────────────────────────────────────
+    public array $cart = [];
+
+    // ── Financials ────────────────────────────────────────────
+    public float  $subTotal      = 0;
+    public string $discountType  = 'amount'; // 'amount' | 'percentage'
+    public mixed  $discountValue = 0;
+    public float  $discountAmount = 0;
+    public float  $grandTotal    = 0;
+
+    // ── Checkout ──────────────────────────────────────────────
+    public mixed  $customerId     = null;
+    public array  $customers      = [];
+    public mixed  $accountId      = null;
+    public array  $paymentMethods = [];
+    public mixed  $amountPaid     = 0;
+
+    // ──────────────────────────────────────────────────────────
+    public bool $isCreditSale = false;
+
 
     public function getMaxContentWidth(): MaxWidth|string|null
     {
@@ -47,9 +64,18 @@ class PosTerminal extends Page implements HasForms, HasActions
     public function mount(): void
     {
         $this->loadCustomers();
+
+        $this->paymentMethods = Account::where('name', '!=', 'Accounts Receivable')
+            ->pluck('name', 'id')
+            ->toArray();
+
+        $this->accountId = Account::where('name', 'Cash')->first()?->id
+            ?? array_key_first($this->paymentMethods);
     }
 
-    public function loadCustomers()
+    // ── Customers ─────────────────────────────────────────────
+
+    public function loadCustomers(): void
     {
         $walkIn = Customer::firstOrCreate(
             ['phone' => '0000000000'],
@@ -57,120 +83,109 @@ class PosTerminal extends Page implements HasForms, HasActions
         );
 
         $this->customers = Customer::pluck('name', 'id')->toArray();
-        
-        // Ensure customerId is set, defaulting to walk-in if currently empty
-        if (!$this->customerId) {
+
+        if (! $this->customerId) {
             $this->customerId = $walkIn->id;
         }
     }
 
-    // Action to create a new customer via a modal
     public function createCustomerAction(): Action
     {
         return Action::make('createCustomer')
-            ->label('New')
+            ->label('New Customer')
             ->icon('heroicon-m-plus')
             ->color('primary')
             ->form([
-                TextInput::make('name')
-                    ->required()
-                    ->maxLength(255),
-                TextInput::make('phone')
-                    ->tel()
-                    ->required()
-                    ->maxLength(255),
-                Textarea::make('address')
-                    ->maxLength(65535),
+                TextInput::make('name')->required()->maxLength(255),
+                TextInput::make('phone')->tel()->required()->maxLength(255),
+                Textarea::make('address')->maxLength(65535)->rows(2),
             ])
             ->action(function (array $data) {
                 $customer = Customer::create($data);
-                
-                // Reload the dropdown list and select the newly created customer
                 $this->loadCustomers();
                 $this->customerId = $customer->id;
-
-                Notification::make()
-                    ->title('Customer created successfully')
-                    ->success()
-                    ->send();
+                Notification::make()->title('Customer created')->success()->send();
             });
     }
 
-    public function getCategoriesProperty()
+    // ── Product catalogue (computed properties) ───────────────
+
+    public function getCategoriesProperty(): array
     {
         $categories = [
-            ['id' => 'all', 'name' => 'All Items', 'icon' => 'heroicon-o-squares-2x2', 'color' => 'gray'],
-            ['id' => 'incubators', 'name' => 'Products', 'icon' => 'heroicon-o-cube', 'color' => 'primary'],
+            ['id' => 'all',        'name' => 'All Items'],
+            ['id' => 'incubators', 'name' => 'Products'],
         ];
 
-        $accessoryCategories = Accessory::select('category')->distinct()->pluck('category');
-
-        foreach ($accessoryCategories as $cat) {
-            $categories[] = [
-                'id' => $cat,
-                'name' => ucwords(str_replace('_', ' ', $cat)),
-                'icon' => 'heroicon-o-tag',
-                'color' => 'success',
-            ];
-        }
+        Accessory::select('category')
+            ->distinct()
+            ->pluck('category')
+            ->each(function ($cat) use (&$categories) {
+                $categories[] = [
+                    'id'   => $cat,
+                    'name' => ucwords(str_replace('_', ' ', $cat)),
+                ];
+            });
 
         return $categories;
     }
 
     public function getProductsProperty()
     {
-        $querySearch = '%' . $this->search . '%';
+        $like    = '%' . $this->search . '%';
         $results = collect();
 
+        // Incubators
         if (in_array($this->activeCategory, ['all', 'incubators'])) {
-            $incubators = Incubator::where('name', 'like', $querySearch)
-                ->get()->map(function ($item) {
-                    return [
-                        'id' => $item->id,
-                        'type' => Incubator::class,
-                        'name' => $item->name,
+            $results = $results->concat(
+                Incubator::where('name', 'like', $like)
+                    ->get()
+                    ->map(fn($item) => [
+                        'id'    => $item->id,
+                        'type'  => Incubator::class,
+                        'name'  => $item->name,
                         'price' => $item->price,
                         'stock' => $item->current_stock,
-                        'color' => 'primary',
-                        'icon' => 'heroicon-o-cube'
-                    ];
-                });
-            $results = $results->concat($incubators);
+                    ])
+            );
         }
 
+        // Accessories
         if ($this->activeCategory !== 'incubators') {
-            $accessoryQuery = Accessory::where('name', 'like', $querySearch);
+            $query = Accessory::where('name', 'like', $like);
 
             if ($this->activeCategory !== 'all') {
-                $accessoryQuery->where('category', $this->activeCategory);
+                $query->where('category', $this->activeCategory);
             }
 
-            $accessories = $accessoryQuery->get()->map(function ($item) {
-                return [
-                    'id' => $item->id,
-                    'type' => Accessory::class,
-                    'name' => $item->name,
+            $results = $results->concat(
+                $query->get()->map(fn($item) => [
+                    'id'    => $item->id,
+                    'type'  => Accessory::class,
+                    'name'  => $item->name,
                     'price' => $item->selling_price,
                     'stock' => $item->current_stock,
-                    'color' => 'success',
-                    'icon' => 'heroicon-o-tag'
-                ];
-            });
-            $results = $results->concat($accessories);
+                ])
+            );
         }
 
         return $results;
     }
 
-    public function setCategory($category)
+    // ── Category selection ────────────────────────────────────
+
+    public function setCategory(string $category): void
     {
         $this->activeCategory = $category;
     }
 
-    public function addToCart($type, $id)
+    // ── Cart operations ───────────────────────────────────────
+
+    public function addToCart(string $type, int $id): void
     {
         $record = $type::find($id);
-        if (!$record || $record->current_stock <= 0) {
+
+        if (! $record || $record->current_stock <= 0) {
             Notification::make()->title('Out of stock!')->danger()->send();
             return;
         }
@@ -180,61 +195,74 @@ class PosTerminal extends Page implements HasForms, HasActions
         if (isset($this->cart[$cartKey])) {
             if ($this->cart[$cartKey]['quantity'] < $record->current_stock) {
                 $this->cart[$cartKey]['quantity']++;
-                $this->cart[$cartKey]['row_total'] = $this->cart[$cartKey]['quantity'] * $this->cart[$cartKey]['unit_price'];
+                $this->cart[$cartKey]['row_total'] =
+                    $this->cart[$cartKey]['quantity'] * $this->cart[$cartKey]['unit_price'];
             } else {
-                Notification::make()->title('Not enough stock!')->warning()->send();
+                Notification::make()->title('Max stock reached!')->warning()->send();
             }
         } else {
-            $cost = 0;
-            if (class_basename($type) === 'Accessory') {
-                $cost = $record->cost_price ?? 0;
-            } else {
-                $cost = $record->cost ?? DB::table('incubator_material')
-                    ->join('materials', 'incubator_material.material_id', '=', 'materials.id')
-                    ->where('incubator_id', $record->id)
-                    ->selectRaw('SUM(incubator_material.quantity_required * materials.cost_per_unit) as calculated_cost')
-                    ->value('calculated_cost') ?? 0;
-            }
+            $cost = $this->resolveCost($type, $record);
 
-            $price = class_basename($type) === 'Accessory' ? $record->selling_price : $record->price;
+            $price = class_basename($type) === 'Accessory'
+                ? $record->selling_price
+                : $record->price;
 
             $this->cart[$cartKey] = [
-                'type' => $type,
-                'id' => $id,
-                'name' => $record->name,
+                'type'       => $type,
+                'id'         => $id,
+                'name'       => $record->name,
                 'unit_price' => $price,
-                'unit_cost' => $cost,
-                'quantity' => 1,
-                'row_total' => $price,
-                'stock' => $record->current_stock
+                'unit_cost'  => $cost,
+                'quantity'   => 1,
+                'row_total'  => $price,
+                'stock'      => $record->current_stock,
             ];
         }
 
         $this->calculateTotal();
     }
 
-    public function increaseQuantity($key)
+    /**
+     * Resolve COGS for an item (Accessory = cost_price, Incubator = cost or BOM sum).
+     */
+    private function resolveCost(string $type, $record): float
     {
-        if (!isset($this->cart[$key])) {
-            return;
+        if (class_basename($type) === 'Accessory') {
+            return (float) ($record->cost_price ?? 0);
         }
 
-        if ($this->cart[$key]['quantity'] < $this->cart[$key]['stock']) {
+        if ($record->cost) {
+            return (float) $record->cost;
+        }
+
+        // BOM-based cost
+        return (float) (DB::table('incubator_material')
+            ->join('materials', 'incubator_material.material_id', '=', 'materials.id')
+            ->where('incubator_id', $record->id)
+            ->selectRaw('SUM(incubator_material.quantity_required * materials.cost_per_unit) as total')
+            ->value('total') ?? 0);
+    }
+
+    public function increaseQuantity(string $key): void
+    {
+        if (isset($this->cart[$key]) && $this->cart[$key]['quantity'] < $this->cart[$key]['stock']) {
             $this->cart[$key]['quantity']++;
-            $this->cart[$key]['row_total'] = $this->cart[$key]['quantity'] * $this->cart[$key]['unit_price'];
+            $this->cart[$key]['row_total'] =
+                $this->cart[$key]['quantity'] * $this->cart[$key]['unit_price'];
             $this->calculateTotal();
+        } else {
+            Notification::make()->title('Max stock reached!')->warning()->send();
         }
     }
 
-    public function decreaseQuantity($key)
+    public function decreaseQuantity(string $key): void
     {
-        if (!isset($this->cart[$key])) {
-            return;
-        }
+        if (! isset($this->cart[$key])) return;
 
         if ($this->cart[$key]['quantity'] > 1) {
             $this->cart[$key]['quantity']--;
-            $this->cart[$key]['row_total'] = $this->cart[$key]['quantity'] * $this->cart[$key]['unit_price'];
+            $this->cart[$key]['row_total'] =
+                $this->cart[$key]['quantity'] * $this->cart[$key]['unit_price'];
         } else {
             unset($this->cart[$key]);
         }
@@ -242,69 +270,139 @@ class PosTerminal extends Page implements HasForms, HasActions
         $this->calculateTotal();
     }
 
-    public function removeFromCart($key)
+    public function updateItemPrice(string $key, mixed $newPrice): void
     {
-        if (!isset($this->cart[$key])) {
-            return;
-        }
+        if (! isset($this->cart[$key])) return;
 
+        $price = max(0, (float) $newPrice);
+        $this->cart[$key]['unit_price'] = $price;
+        $this->cart[$key]['row_total']  = $this->cart[$key]['quantity'] * $price;
+        $this->calculateTotal();
+    }
+
+    public function removeFromCart(string $key): void
+    {
         unset($this->cart[$key]);
         $this->calculateTotal();
     }
 
-    public function calculateTotal()
+    /**
+     * Remove the last item added to the cart (called by Esc key via Alpine).
+     */
+    public function removeLastCartItem(): void
     {
-        $this->grandTotal = collect($this->cart)->sum('row_total');
+        if (empty($this->cart)) return;
+
+        $lastKey = array_key_last($this->cart);
+        unset($this->cart[$lastKey]);
+        $this->calculateTotal();
     }
 
-    public function processSale()
+    // ── Totals ────────────────────────────────────────────────
+
+    public function updatedDiscountValue(): void
+    {
+        $this->calculateTotal();
+    }
+    public function updatedDiscountType(): void
+    {
+        $this->calculateTotal();
+    }
+
+    public function calculateTotal(): void
+    {
+        $this->subTotal = (float) collect($this->cart)->sum('row_total');
+
+        $val = (float) $this->discountValue;
+        $this->discountAmount = $this->discountType === 'percentage'
+            ? $this->subTotal * ($val / 100)
+            : $val;
+
+        if ($this->discountAmount > $this->subTotal) {
+            $this->discountAmount = $this->subTotal;
+        }
+
+        $this->grandTotal = max(0, $this->subTotal - $this->discountAmount);
+
+        // FIX: Only auto-fill if it's NOT a credit sale
+        if ($this->isCreditSale) {
+            $this->amountPaid = 0;
+        } else {
+            $this->amountPaid = $this->grandTotal;
+        }
+    }
+
+    public function toggleCreditSale(): void
+    {
+        $this->isCreditSale = !$this->isCreditSale;
+        $this->calculateTotal();
+    }
+
+    // ── Process Sale ──────────────────────────────────────────
+
+    public function processSale(): void
     {
         if (empty($this->cart) || $this->grandTotal <= 0) {
-            Notification::make()->title('Cart is empty')->danger()->send();
+            Notification::make()->title('Cart is empty or total is zero')->danger()->send();
             return;
         }
 
-        $cashAccount = Account::where('name', 'Cash')->first();
+        $actualPaid = min((float) $this->amountPaid, $this->grandTotal);
 
-        $invoice = DB::transaction(function () use ($cashAccount) {
+        $paymentStatus = match (true) {
+            $actualPaid >= $this->grandTotal => 'paid',
+            $actualPaid > 0                  => 'partial',
+            default                          => 'credit',
+        };
 
-            $createdInvoice = Invoice::create([
-                'customer_id' => $this->customerId,
-                'invoice_date' => now(),
-                'status' => 'draft',
-                'payment_method' => 'cash',
-                'account_id' => $cashAccount->id ?? 1,
-                'total_amount' => $this->grandTotal,
+        $invoice = DB::transaction(function () use ($actualPaid, $paymentStatus) {
+
+            $created = Invoice::create([
+                'customer_id'    => $this->customerId,
+                'invoice_date'   => now(),
+                'status'         => 'draft',
+                'payment_method' => Account::find($this->accountId)?->name ?? 'Cash',
+                'account_id'     => $this->accountId,
+                'total_amount'   => $this->grandTotal,
+                'amount_paid'    => $actualPaid,
+                'payment_status' => $paymentStatus,
             ]);
 
             foreach ($this->cart as $item) {
-                $createdInvoice->items()->create([
+                $created->items()->create([
                     'sellable_type' => $item['type'],
-                    'sellable_id' => $item['id'],
-                    'quantity' => $item['quantity'],
-                    'unit_price' => $item['unit_price'],
-                    'unit_cost' => $item['unit_cost'],
-                    'row_total' => $item['row_total'],
+                    'sellable_id'   => $item['id'],
+                    'quantity'      => $item['quantity'],
+                    'unit_price'    => $item['unit_price'],
+                    'unit_cost'     => $item['unit_cost'],
+                    'row_total'     => $item['row_total'],
                 ]);
 
                 $product = $item['type']::find($item['id']);
-                if ($product) {
-                    $product->decrement('current_stock', $item['quantity']);
-                }
+                $product?->decrement('current_stock', $item['quantity']);
             }
 
-            $createdInvoice->update(['status' => 'delivered']);
+            $created->update(['status' => 'delivered']);
 
-            return $createdInvoice;
+            return $created;
         });
 
         Notification::make()->title('Sale Completed!')->success()->send();
-
         $this->dispatch('print-receipt', ['invoiceId' => $invoice->id]);
 
-        $this->cart = [];
-        $this->grandTotal = 0;
-        $this->search = '';
+        $this->resetAfterSale();
+    }
+
+    private function resetAfterSale(): void
+    {
+        $this->cart           = [];
+        $this->subTotal       = 0;
+        $this->grandTotal     = 0;
+        $this->discountValue  = 0;
+        $this->discountAmount = 0;
+        $this->amountPaid     = 0;
+        $this->search         = '';
         $this->activeCategory = 'all';
+        $this->isCreditSale   = false; // Reset back to full pay for next customer
     }
 }

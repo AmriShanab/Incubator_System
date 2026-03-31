@@ -9,6 +9,7 @@ use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Support\Facades\DB;
 
 class InvoiceResource extends Resource
 {
@@ -60,31 +61,27 @@ class InvoiceResource extends Resource
                                                     if ($record) {
                                                         $price = $record->selling_price ?? $record->price ?? 0;
 
-                                                        // --- SMART COST FETCHER ---
                                                         $cost = 0;
-                                                        if (class_basename($modelClass) === 'Accessory') { // Note: use $type instead of $modelClass in PosTerminal.php
+                                                        if (class_basename($modelClass) === 'Accessory') {
                                                             $cost = $record->cost_price ?? 0;
                                                         } else {
-                                                            // Bulletproof BOM Calculation
                                                             $cost = $record->cost ?? \Illuminate\Support\Facades\DB::table('incubator_material')
                                                                 ->join('materials', 'incubator_material.material_id', '=', 'materials.id')
                                                                 ->where('incubator_id', $record->id)
                                                                 ->selectRaw('SUM(incubator_material.quantity_required * materials.cost_per_unit) as calculated_cost')
                                                                 ->value('calculated_cost') ?? 0;
                                                         }
-                                                        // --------------------------
 
                                                         $set('unit_price', $price);
-                                                        $set('unit_cost', $cost); // Saves the dynamically calculated BOM cost!
+                                                        $set('unit_cost', $cost);
                                                         $set('row_total', $price * (int)$get('quantity'));
                                                     }
                                                 }
-                                                // Force Grand Total Update
                                                 $total = collect($get('../../items'))->sum(fn($item) => (float)($item['row_total'] ?? 0));
                                                 $set('../../total_amount', $total);
                                             }),
 
-                                        Forms\Components\Hidden::make('unit_cost')->default(0), // The silent cost tracker
+                                        Forms\Components\Hidden::make('unit_cost')->default(0),
 
                                         Forms\Components\TextInput::make('unit_price')
                                             ->label('Unit Price')
@@ -95,7 +92,6 @@ class InvoiceResource extends Resource
                                             ->live(onBlur: true)
                                             ->afterStateUpdated(function ($state, Forms\Get $get, Forms\Set $set) {
                                                 $set('row_total', (float)$state * (int)$get('quantity'));
-                                                // Force Grand Total Update
                                                 $total = collect($get('../../items'))->sum(fn($item) => (float)($item['row_total'] ?? 0));
                                                 $set('../../total_amount', $total);
                                             }),
@@ -159,6 +155,12 @@ class InvoiceResource extends Resource
                                     ->default(now())
                                     ->required(),
 
+                                Forms\Components\TextInput::make('tracking_number')
+                                    ->label('Tracking Number')
+                                    ->placeholder('e.g. PX12345678')
+                                    ->maxLength(255)
+                                    ->prefixIcon('heroicon-m-qr-code'),
+
                                 Forms\Components\Select::make('status')
                                     ->options([
                                         'draft' => 'Draft',
@@ -198,13 +200,24 @@ class InvoiceResource extends Resource
     {
         return $table
             ->columns([
-                Tables\Columns\TextColumn::make('id')
-                    ->label('INV #')
-                    ->searchable()
+                Tables\Columns\TextColumn::make('tracking_number')
+                    ->label('Order Reference')
+                    ->searchable(['tracking_number', 'id'])
                     ->sortable()
                     ->weight('bold')
-                    ->prefix('INV-')
-                    ->description(fn(Invoice $record): string => $record->invoice_date),
+                    ->copyable()
+                    ->color(fn(Invoice $record) => $record->tracking_number ? 'primary' : 'gray')
+                    ->icon(fn(Invoice $record) => $record->tracking_number ? 'heroicon-m-qr-code' : 'heroicon-m-hashtag')
+                    ->url(function (Invoice $record) {
+                        if (!$record->tracking_number) return null;
+                        return "https://www.trackingwebsite.com/track/{$record->tracking_number}";
+                    })
+                    ->openUrlInNewTab()
+                    ->getStateUsing(fn(Invoice $record) => $record->tracking_number ?: 'INV-' . str_pad($record->id, 5, '0', STR_PAD_LEFT))
+                    ->description(function (Invoice $record): string {
+                        $invStr = 'INV-' . str_pad($record->id, 5, '0', STR_PAD_LEFT);
+                        return $record->tracking_number ? "Internal: {$invStr} | Date: {$record->invoice_date}" : "Date: {$record->invoice_date}";
+                    }),
 
                 Tables\Columns\TextColumn::make('customer.name')
                     ->label('Customer')
@@ -224,12 +237,24 @@ class InvoiceResource extends Resource
                         default => 'gray',
                     }),
 
+                Tables\Columns\TextColumn::make('payment_status')
+                    ->label('Payment')
+                    ->badge()
+                    ->color(fn(string $state): string => match ($state) {
+                        'paid' => 'success',
+                        'partial' => 'warning',
+                        'credit' => 'danger',
+                        default => 'gray',
+                    })
+                    ->formatStateUsing(fn(string $state) => ucfirst($state)),
+
                 Tables\Columns\TextColumn::make('total_amount')
                     ->label('Amount')
                     ->money('LKR')
                     ->sortable()
                     ->weight('bold')
                     ->alignEnd()
+                    ->description(fn(Invoice $record) => $record->payment_status !== 'paid' ? 'Due: LKR ' . number_format($record->total_amount - $record->amount_paid, 2) : '')
                     ->summarize(Tables\Columns\Summarizers\Sum::make()->money('LKR')),
             ])
             ->defaultSort('created_at', 'desc')
@@ -237,6 +262,75 @@ class InvoiceResource extends Resource
                 Tables\Actions\EditAction::make(),
 
                 Tables\Actions\ActionGroup::make([
+
+                    // ── POST-SALE FIX: Revert to Credit ──
+                    Tables\Actions\Action::make('markAsCredit')
+                        ->label('Revert to Credit')
+                        ->icon('heroicon-m-arrow-uturn-left')
+                        ->color('warning')
+                        ->requiresConfirmation()
+                        ->modalHeading('Convert to Credit Sale?')
+                        ->modalDescription('This will set the amount paid to zero, mark the invoice as "Credit", and reverse the physical account balances.')
+                        ->visible(fn(Invoice $record) => $record->payment_status !== 'credit' && $record->amount_paid > 0)
+                        ->action(function (Invoice $record) {
+
+                            DB::transaction(function () use ($record) {
+                                $paidAmount = (float) $record->amount_paid;
+
+                                if ($paidAmount > 0) {
+                                    // Find our accounts
+                                    $arAccount = \App\Models\Account::where('name', 'Accounts Receivable')->first();
+
+                                    // Assume the money is currently sitting in the account linked to the invoice, 
+                                    // or fallback to 'Cash' if missing
+                                    $cashAccount = $record->account ?? \App\Models\Account::where('name', 'Cash')->first();
+
+                                    if ($arAccount && $cashAccount) {
+
+                                        // Calculate how much was capital vs profit so we reverse it accurately
+                                        $capitalToReverse = min($paidAmount, $record->total_cost ?? 0);
+                                        $profitToReverse  = max(0, $paidAmount - $capitalToReverse);
+
+                                        // 1. Take the money OUT of Cash/Bank
+                                        $record->transactions()->create([
+                                            'account_id'       => $cashAccount->id,
+                                            'type'             => 'out',
+                                            'amount'           => $paidAmount,
+                                            'description'      => "Reversed payment for Invoice #{$record->id}",
+                                            'transaction_date' => now()->toDateString(),
+                                        ]);
+                                        $cashAccount->decrement('balance', $paidAmount);
+                                        $cashAccount->decrement('capital_pool', $capitalToReverse);
+                                        $cashAccount->decrement('profit_pool', $profitToReverse);
+
+                                        // 2. Put the debt back INTO Accounts Receivable
+                                        $record->transactions()->create([
+                                            'account_id'       => $arAccount->id,
+                                            'type'             => 'in',
+                                            'amount'           => $paidAmount,
+                                            'description'      => "Debt reinstated for Invoice #{$record->id}",
+                                            'transaction_date' => now()->toDateString(),
+                                        ]);
+                                        $arAccount->increment('balance', $paidAmount);
+                                        $arAccount->increment('capital_pool', $capitalToReverse);
+                                        $arAccount->increment('profit_pool', $profitToReverse);
+                                    }
+                                }
+
+                                // 3. Update the Invoice status
+                                $record->update([
+                                    'amount_paid'    => 0,
+                                    'payment_status' => 'credit',
+                                ]);
+                            });
+
+                            \Filament\Notifications\Notification::make()
+                                ->title('Sale reverted to credit')
+                                ->body('Account balances have been successfully reversed.')
+                                ->success()
+                                ->send();
+                        }),
+
                     Tables\Actions\Action::make('process')
                         ->label('Start Processing')
                         ->icon('heroicon-m-play')
@@ -249,9 +343,27 @@ class InvoiceResource extends Resource
                         ->label('Dispatch')
                         ->icon('heroicon-m-truck')
                         ->color('warning')
-                        ->requiresConfirmation()
                         ->visible(fn(Invoice $record) => $record->status === 'processing')
-                        ->action(fn(Invoice $record) => $record->update(['status' => 'out_for_delivery'])),
+                        ->form([
+                            Forms\Components\TextInput::make('tracking_number')
+                                ->label('Courier Tracking Number')
+                                ->placeholder('Scan barcode or type here...')
+                                ->required()
+                                ->autofocus()
+                                ->maxLength(255),
+                        ])
+                        ->action(function (Invoice $record, array $data) {
+                            $record->update([
+                                'status' => 'out_for_delivery',
+                                'tracking_number' => $data['tracking_number'],
+                            ]);
+
+                            \Filament\Notifications\Notification::make()
+                                ->success()
+                                ->title('Dispatched!')
+                                ->body('Tracking number saved.')
+                                ->send();
+                        }),
 
                     Tables\Actions\Action::make('deliver')
                         ->label('Mark Delivered')
@@ -260,6 +372,90 @@ class InvoiceResource extends Resource
                         ->requiresConfirmation()
                         ->visible(fn(Invoice $record) => $record->status === 'out_for_delivery')
                         ->action(fn(Invoice $record) => $record->update(['status' => 'delivered'])),
+
+                    Tables\Actions\Action::make('receive_payment')
+                        ->label('Receive Payment')
+                        ->icon('heroicon-m-banknotes')
+                        ->color('success')
+                        ->visible(fn(Invoice $record) => in_array($record->payment_status, ['partial', 'credit']) && $record->status === 'delivered')
+                        ->form(function (Invoice $record) {
+                            $due = max(0, $record->total_amount - $record->amount_paid);
+                            return [
+                                Forms\Components\Placeholder::make('amount_due_display')
+                                    ->label('Remaining Balance')
+                                    ->content('LKR ' . number_format($due, 2))
+                                    ->extraAttributes(['class' => 'text-xl font-bold text-danger-600']),
+
+                                Forms\Components\TextInput::make('payment_amount')
+                                    ->label('Payment Amount')
+                                    ->numeric()
+                                    ->prefix('LKR')
+                                    ->default($due)
+                                    ->maxValue($due)
+                                    ->minValue(1)
+                                    ->required(),
+
+                                Forms\Components\Select::make('account_id')
+                                    ->label('Deposit To')
+                                    ->options(\App\Models\Account::where('name', '!=', 'Accounts Receivable')->pluck('name', 'id'))
+                                    ->required()
+                                    ->default(fn() => \App\Models\Account::where('name', 'Cash')->first()?->id),
+                            ];
+                        })
+                        ->action(function (Invoice $record, array $data) {
+                            DB::transaction(function () use ($record, $data) {
+                                $paidNow = (float) $data['payment_amount'];
+                                $destAccount = \App\Models\Account::find($data['account_id']);
+                                $arAccount = \App\Models\Account::where('name', 'Accounts Receivable')->first();
+
+                                if (!$destAccount || !$arAccount) return;
+
+                                // Recalculate how much capital vs profit we are collecting right now
+                                $oldAmountPaid = $record->amount_paid;
+                                $remainingCapitalToRecover = max(0, $record->total_cost - $oldAmountPaid);
+
+                                $recoveredCapital = min($paidNow, $remainingCapitalToRecover);
+                                $recoveredProfit = max(0, $paidNow - $recoveredCapital);
+
+                                // 1. Pull the money OUT of the pending Accounts Receivable pool
+                                $record->transactions()->create([
+                                    'account_id' => $arAccount->id,
+                                    'type' => 'out',
+                                    'amount' => $paidNow,
+                                    'description' => "Debt collected for Invoice #{$record->id}",
+                                    'transaction_date' => now()->toDateString(),
+                                ]);
+                                $arAccount->decrement('balance', $paidNow);
+                                $arAccount->decrement('capital_pool', $recoveredCapital);
+                                $arAccount->decrement('profit_pool', $recoveredProfit);
+
+                                // 2. Put the physical cash INTO the actual Cash/Bank account
+                                $record->transactions()->create([
+                                    'account_id' => $destAccount->id,
+                                    'type' => 'in',
+                                    'amount' => $paidNow,
+                                    'description' => "Late payment received for Invoice #{$record->id}",
+                                    'transaction_date' => now()->toDateString(),
+                                ]);
+                                $destAccount->increment('balance', $paidNow);
+                                $destAccount->increment('capital_pool', $recoveredCapital);
+                                $destAccount->increment('profit_pool', $recoveredProfit);
+
+                                // 3. Update the Invoice status
+                                $newTotalPaid = $oldAmountPaid + $paidNow;
+                                $newStatus = $newTotalPaid >= $record->total_amount ? 'paid' : 'partial';
+
+                                $record->updateQuietly([
+                                    'amount_paid' => $newTotalPaid,
+                                    'payment_status' => $newStatus,
+                                ]);
+                            });
+
+                            \Filament\Notifications\Notification::make()
+                                ->title('Payment Applied Successfully')
+                                ->success()
+                                ->send();
+                        }),
 
                     Tables\Actions\Action::make('cancel')
                         ->label('Cancel Invoice')

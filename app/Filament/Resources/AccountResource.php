@@ -12,6 +12,7 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\HtmlString; 
 
 class AccountResource extends Resource
 {
@@ -86,7 +87,6 @@ class AccountResource extends Resource
             ->actions([
                 Tables\Actions\EditAction::make(),
 
-                // THE NEW INVOICE-AWARE SETTLEMENT ACTION
                 Tables\Actions\Action::make('settle_funds')
                     ->label('Settle COD')
                     ->icon('heroicon-m-arrows-right-left')
@@ -102,19 +102,49 @@ class AccountResource extends Resource
 
                         Forms\Components\CheckboxList::make('settlement_invoices')
                             ->label('Select Invoices being Settled')
-                            ->helperText('Check the invoices shown on your courier remittance slip.')
+                            ->helperText('Check the invoices shown on your courier remittance slip. Verify the items below.')
                             ->options(function (Account $record) {
-                                return \App\Models\Invoice::where('account_id', $record->id)
+                                return \App\Models\Invoice::with('items.sellable')
+                                    ->where('account_id', $record->id)
                                     ->where('is_settled', 0)
                                     ->get()
                                     ->mapWithKeys(function ($invoice) {
-                                        $label = "INV-" . str_pad($invoice->id, 5, '0', STR_PAD_LEFT) . " | Date: " . $invoice->invoice_date . " | LKR " . number_format($invoice->total_amount, 2);
-                                        return [(string) $invoice->id => $label];
+                                        
+                                        $identifier = $invoice->tracking_number 
+                                            ? "{$invoice->tracking_number} <span class='text-gray-400 font-normal'>(INV-" . str_pad($invoice->id, 5, '0', STR_PAD_LEFT) . ")</span>"
+                                            : "INV-" . str_pad($invoice->id, 5, '0', STR_PAD_LEFT);
+                                            
+                                        $amount = number_format($invoice->total_amount, 2);
+                                        
+                                        $itemsList = $invoice->items->map(function ($item) {
+                                            $itemName = $item->sellable ? $item->sellable->name : 'Unknown Item';
+                                            return "<b>{$item->quantity}x</b> {$itemName}";
+                                        })->implode(', ');
+
+                                        if (empty($itemsList)) {
+                                            $itemsList = 'No items found';
+                                        }
+
+                                        $html = "
+                                            <div class='flex flex-col py-1 ml-1'>
+                                                <span class='text-sm font-bold text-gray-900 dark:text-white'>
+                                                    {$identifier} &bull; LKR {$amount}
+                                                </span>
+                                                <span class='text-xs text-gray-500 dark:text-gray-400 mb-1'>
+                                                    Dispatched: {$invoice->invoice_date}
+                                                </span>
+                                                <span class='text-xs text-primary-600 dark:text-primary-400 leading-snug'>
+                                                    &#8627; 📦 {$itemsList}
+                                                </span>
+                                            </div>
+                                        ";
+
+                                        return [(string) $invoice->id => new HtmlString($html)];
                                     });
                             })
                             ->required()
                             ->columns(1)
-                            ->bulkToggleable() // <--- THIS ADDS THE NATIVE SELECT ALL / DESELECT ALL BUTTONS
+                            ->bulkToggleable() 
                             ->live() 
                             ->afterStateUpdated(function (Forms\Get $get, Forms\Set $set) {
                                 $selectedIds = $get('settlement_invoices') ?? [];
@@ -170,59 +200,80 @@ class AccountResource extends Resource
                     ])
                     ->action(function (Account $record, array $data) {
                         $selectedInvoiceIds = $data['settlement_invoices'];
-                        $transferAmount = (float) $data['transfer_amount'];
-                        $capitalAmount = (float) $data['capital_amount'];
                         $courierFee = (float) $data['courier_fee'];
-
-                        $netAmount = $transferAmount - $courierFee; 
-                        $profitAmount = $transferAmount - $capitalAmount - $courierFee; 
-
                         $destinationAccount = Account::find($data['destination_account_id']);
 
-                        DB::transaction(function () use ($record, $destinationAccount, $transferAmount, $capitalAmount, $courierFee, $netAmount, $profitAmount, $selectedInvoiceIds) {
+                        DB::transaction(function () use ($record, $destinationAccount, $courierFee, $selectedInvoiceIds) {
+                            
+                            // Fetch the actual invoices to build itemized transactions
+                            $invoices = \App\Models\Invoice::whereIn('id', $selectedInvoiceIds)->get();
 
-                            $record->decrement('balance', $transferAmount);
-                            $record->decrement('capital_pool', $capitalAmount);
-                            $record->decrement('profit_pool', ($transferAmount - $capitalAmount));
+                            $totalTransferAmount = 0;
+                            $totalCapitalAmount = 0;
 
-                            if ($courierFee > 0) {
+                            // LOOP THROUGH EACH INVOICE
+                            foreach ($invoices as $invoice) {
+                                $invAmount = (float) $invoice->total_amount;
+                                $invCost = (float) $invoice->total_cost;
+
+                                $totalTransferAmount += $invAmount;
+                                $totalCapitalAmount += $invCost;
+
+                                $invString = 'INV-' . str_pad($invoice->id, 5, '0', STR_PAD_LEFT);
+                                $trackingInfo = $invoice->tracking_number ? " ({$invoice->tracking_number})" : " ({$invString})";
+
+                                // Create the itemized 'OUT' transaction from the COD Account
                                 $record->transactions()->create([
                                     'type' => 'out',
-                                    'amount' => $courierFee,
-                                    'description' => 'Courier processing fee during settlement',
+                                    'amount' => $invAmount,
+                                    'description' => "Settlement transferred to {$destinationAccount->name}{$trackingInfo}",
                                     'transaction_date' => now(),
-                                ]);
-                            }
-
-                            if ($transferAmount > 0) {
-                                $record->transactions()->create([
-                                    'type' => 'out',
-                                    'amount' => $netAmount,
-                                    'description' => "Settlement transfer to {$destinationAccount->name}",
-                                    'transaction_date' => now(),
+                                    'reference_type' => \App\Models\Invoice::class,
+                                    'reference_id' => $invoice->id,
                                 ]);
 
+                                // Create the itemized 'IN' transaction to the Destination Account
                                 $destinationAccount->transactions()->create([
                                     'type' => 'in',
-                                    'amount' => $netAmount,
-                                    'description' => "Settlement received from {$record->name}",
+                                    'amount' => $invAmount,
+                                    'description' => "Settlement received from {$record->name}{$trackingInfo}",
                                     'transaction_date' => now(),
+                                    'reference_type' => \App\Models\Invoice::class,
+                                    'reference_id' => $invoice->id,
                                 ]);
 
-                                $destinationAccount->increment('balance', $netAmount);
-                                $destinationAccount->increment('capital_pool', $capitalAmount);
-                                $destinationAccount->increment('profit_pool', max(0, $profitAmount));
+                                // Mark invoice as settled
+                                $invoice->updateQuietly(['is_settled' => 1]);
                             }
 
-                            \App\Models\Invoice::whereIn('id', $selectedInvoiceIds)->update([
-                                'is_settled' => 1
-                            ]);
+                            // Handle the Courier Fee as a separate single transaction out of the Destination Account
+                            if ($courierFee > 0) {
+                                $destinationAccount->transactions()->create([
+                                    'type' => 'out',
+                                    'amount' => $courierFee,
+                                    'description' => "Courier processing fee for bulk settlement",
+                                    'transaction_date' => now(),
+                                ]);
+                            }
+
+                            $netDestinationAmount = $totalTransferAmount - $courierFee;
+                            $netDestinationProfit = ($totalTransferAmount - $totalCapitalAmount) - $courierFee;
+
+                            // Update Physical Account Balances
+                            $record->decrement('balance', $totalTransferAmount);
+                            $record->decrement('capital_pool', $totalCapitalAmount);
+                            $record->decrement('profit_pool', ($totalTransferAmount - $totalCapitalAmount));
+
+                            $destinationAccount->increment('balance', $netDestinationAmount);
+                            $destinationAccount->increment('capital_pool', $totalCapitalAmount);
+                            $destinationAccount->increment('profit_pool', max(0, $netDestinationProfit));
+
                         });
 
                         Notification::make()
                             ->success()
                             ->title('Settlement Complete')
-                            ->body("Successfully settled " . count($selectedInvoiceIds) . " invoices. Deposited LKR " . number_format($netAmount, 2) . " into {$destinationAccount->name}.")
+                            ->body("Successfully settled " . count($selectedInvoiceIds) . " invoices. See the itemized ledger for details.")
                             ->send();
                     }),
 
