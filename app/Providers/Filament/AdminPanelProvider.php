@@ -47,21 +47,21 @@ class AdminPanelProvider extends PanelProvider
             </style>'),
             )
             ->font('Poppins', provider: GoogleFontProvider::class)
-            
+
 
 
             // --- ENABLE DARK MODE TOGGLE ---
             ->darkMode(true)
             ->darkModeBrandLogo(asset('img/logo-white-removebg-preview.png'))
-     
+
             ->brandName('SN Tech')
             ->colors([
-                'primary' => Color::Cyan, 
-                'danger' => Color::Rose,
-                'gray' => Color::Slate,
-                'info' => Color::Blue,
-                'success' => Color::Emerald,
-                'warning' => Color::Orange,
+                'primary' => Color::Teal,
+                'danger'  => Color::Rose,
+                'gray'    => Color::Stone,
+                'info'    => Color::Sky,
+                'success' => Color::Green,
+                'warning' => Color::Amber,
             ])
             ->sidebarCollapsibleOnDesktop()
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
