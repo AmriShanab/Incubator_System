@@ -278,20 +278,18 @@ class InvoiceResource extends Resource
                                 $paidAmount = (float) $record->amount_paid;
 
                                 if ($paidAmount > 0) {
-                                    // Find our accounts
+                                    // Identify the ultimate destination for Credit debt
                                     $arAccount = \App\Models\Account::where('name', 'Accounts Receivable')->first();
 
-                                    // Assume the money is currently sitting in the account linked to the invoice, 
-                                    // or fallback to 'Cash' if missing
+                                    // Identify where the money is CURRENTLY sitting
                                     $cashAccount = $record->account ?? \App\Models\Account::where('name', 'Cash')->first();
 
                                     if ($arAccount && $cashAccount) {
 
-                                        // Calculate how much was capital vs profit so we reverse it accurately
                                         $capitalToReverse = min($paidAmount, $record->total_cost ?? 0);
                                         $profitToReverse  = max(0, $paidAmount - $capitalToReverse);
 
-                                        // 1. Take the money OUT of Cash/Bank
+                                        // 1. Take the money OUT of Cash/Bank/COD
                                         $record->transactions()->create([
                                             'account_id'       => $cashAccount->id,
                                             'type'             => 'out',
@@ -317,10 +315,11 @@ class InvoiceResource extends Resource
                                     }
                                 }
 
-                                // 3. Update the Invoice status
+                                // 3. Update Invoice status AND properly link it to Accounts Receivable
                                 $record->update([
                                     'amount_paid'    => 0,
                                     'payment_status' => 'credit',
+                                    'account_id'     => isset($arAccount) ? $arAccount->id : $record->account_id,
                                 ]);
                             });
 
@@ -373,6 +372,7 @@ class InvoiceResource extends Resource
                         ->visible(fn(Invoice $record) => $record->status === 'out_for_delivery')
                         ->action(fn(Invoice $record) => $record->update(['status' => 'delivered'])),
 
+                    // ── FIX: Receive Payment (Now respects the specific Invoice's pending Account) ──
                     Tables\Actions\Action::make('receive_payment')
                         ->label('Receive Payment')
                         ->icon('heroicon-m-banknotes')
@@ -406,9 +406,11 @@ class InvoiceResource extends Resource
                             DB::transaction(function () use ($record, $data) {
                                 $paidNow = (float) $data['payment_amount'];
                                 $destAccount = \App\Models\Account::find($data['account_id']);
-                                $arAccount = \App\Models\Account::where('name', 'Accounts Receivable')->first();
+                                
+                                // NEW: Dynamically pull from the exact account holding this debt (COD, AR, etc.)
+                                $pendingAccount = $record->account; 
 
-                                if (!$destAccount || !$arAccount) return;
+                                if (!$destAccount || !$pendingAccount) return;
 
                                 // Recalculate how much capital vs profit we are collecting right now
                                 $oldAmountPaid = $record->amount_paid;
@@ -417,17 +419,17 @@ class InvoiceResource extends Resource
                                 $recoveredCapital = min($paidNow, $remainingCapitalToRecover);
                                 $recoveredProfit = max(0, $paidNow - $recoveredCapital);
 
-                                // 1. Pull the money OUT of the pending Accounts Receivable pool
+                                // 1. Pull the money OUT of the pending pool (COD, AR, etc.)
                                 $record->transactions()->create([
-                                    'account_id' => $arAccount->id,
+                                    'account_id' => $pendingAccount->id,
                                     'type' => 'out',
                                     'amount' => $paidNow,
                                     'description' => "Debt collected for Invoice #{$record->id}",
                                     'transaction_date' => now()->toDateString(),
                                 ]);
-                                $arAccount->decrement('balance', $paidNow);
-                                $arAccount->decrement('capital_pool', $recoveredCapital);
-                                $arAccount->decrement('profit_pool', $recoveredProfit);
+                                $pendingAccount->decrement('balance', $paidNow);
+                                $pendingAccount->decrement('capital_pool', $recoveredCapital);
+                                $pendingAccount->decrement('profit_pool', $recoveredProfit);
 
                                 // 2. Put the physical cash INTO the actual Cash/Bank account
                                 $record->transactions()->create([

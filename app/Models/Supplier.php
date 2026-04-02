@@ -15,6 +15,7 @@ class Supplier extends Model
         'contact_person',
         'email',
         'phone',
+        'category'
     ];
 
     // Relationship: A supplier has many Purchase Orders
