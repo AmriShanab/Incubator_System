@@ -17,7 +17,7 @@ class UserRoleSeeder extends Seeder
 
         // 2. The Cashier (Front Desk)
         User::updateOrCreate(
-            ['email' => 'cashier@test.com'],
+            ['email' => 'cashier@sntech.com'],
             [
                 'name' => 'Main Cashier',
                 'password' => Hash::make('password'),
@@ -26,7 +26,7 @@ class UserRoleSeeder extends Seeder
         );
 
         User::updateOrCreate(
-            ['email' => 'inventory@test.com'],
+            ['email' => 'inventory@sntech.com'],
             [
                 'name' => 'Inventory Manager',
                 'password' => Hash::make('password'),

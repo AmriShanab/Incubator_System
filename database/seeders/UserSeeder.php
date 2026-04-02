@@ -14,7 +14,7 @@ class UserSeeder extends Seeder
     {
         // Using DB::table prevents Laravel's model casts from double-hashing your already-hashed password
         DB::table('users')->updateOrInsert(
-            ['email' => 'admin@incubator.com'], // Search by this
+            ['email' => 'admin@sntech.com'], // Search by this
             [
                 'id' => 1,
                 'name' => 'Admin',
