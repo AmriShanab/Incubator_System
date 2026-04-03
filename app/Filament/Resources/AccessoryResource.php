@@ -83,17 +83,34 @@ class AccessoryResource extends Resource
                                     ->prefix('LKR')
                                     ->label('Selling Price'),
 
+                                Forms\Components\Select::make('uom')
+                                    ->label('Unit of Measure')
+                                    ->options([
+                                        'pcs' => 'Pieces (pcs)',
+                                        'kg' => 'Kilograms (kg)',
+                                        'm' => 'Meters (m)',
+                                        'l' => 'Liters (l)',
+                                        'g' =>  'Grams (g)',
+                                    ])
+                                    ->default('pcs')
+                                    ->required()
+                                    ->native(false),
+
                                 Forms\Components\TextInput::make('current_stock')
                                     ->required()
                                     ->numeric()
+                                    ->step('any')
                                     ->default(0)
                                     ->label('Live Stock')
                                     ->disabledOn('edit')
                                     ->helperText('Updated via sales & purchases.'),
 
+
+
                                 Forms\Components\TextInput::make('min_stock_alert')
                                     ->label('Low Stock Alert Level')
                                     ->numeric()
+                                    ->step('any')
                                     ->default(5)
                                     ->minValue(0)
                                     ->required()
@@ -119,7 +136,7 @@ class AccessoryResource extends Resource
                     ->label('Category')
                     ->badge()
                     ->color('info')
-                    ->formatStateUsing(fn (string $state): string => ucfirst($state))
+                    ->formatStateUsing(fn(string $state): string => ucfirst($state))
                     ->sortable()
                     ->searchable(),
 
@@ -136,17 +153,19 @@ class AccessoryResource extends Resource
                     ->money('LKR')
                     ->color(fn(float $state): string => $state > 0 ? 'success' : 'danger')
                     ->sortable()
-                    ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin')
+                    ->visible(fn() => \Illuminate\Support\Facades\Auth::user()?->role === 'admin')
                     ->alignEnd(),
 
                 Tables\Columns\TextColumn::make('current_stock')
                     ->label('Available')
-                    ->numeric()
+                    ->numeric(decimalPlaces: 2) // Show up to 2 decimal places
                     ->sortable()
                     ->badge()
+                    // Add the UOM to the end of the number!
+                    ->formatStateUsing(fn($state, Accessory $record): string => $state . ' ' . ($record->uom ?? 'pcs'))
                     ->color(fn(int|float $state, Accessory $record): string => match (true) {
-                        $state <= (int) ($record->min_stock_alert ?? 5) => 'danger',
-                        $state <= ((int) ($record->min_stock_alert ?? 5) * 2) => 'warning',
+                        $state <= (float) ($record->min_stock_alert ?? 5) => 'danger',
+                        $state <= ((float) ($record->min_stock_alert ?? 5) * 2) => 'warning',
                         default => 'success',
                     })
                     ->alignEnd(),
@@ -155,12 +174,12 @@ class AccessoryResource extends Resource
             ->actions([
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make()
-                    ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
+                    ->visible(fn() => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\DeleteBulkAction::make()
-                        ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
+                        ->visible(fn() => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
                 ]),
             ]);
     }

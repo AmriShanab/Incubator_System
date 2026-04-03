@@ -77,9 +77,23 @@ class IncubatorResource extends Resource
                                     ->required()
                                     ->placeholder('0.00'),
 
+                                // NEW: Unit of Measure Dropdown
+                                Forms\Components\Select::make('uom')
+                                    ->label('Unit of Measure')
+                                    ->options([
+                                        'pcs' => 'Pieces (pcs)',
+                                        'kg'  => 'Kilograms (kg)',
+                                        'm'   => 'Meters (m)',
+                                        'l'   => 'Liters (l)',
+                                    ])
+                                    ->default('pcs')
+                                    ->required()
+                                    ->native(false),
+
                                 Forms\Components\TextInput::make('current_stock')
                                     ->label('Live Stock')
                                     ->numeric()
+                                    ->step('any') // ALLOWS DECIMALS!
                                     ->default(0)
                                     ->disabled() // Locked because Production Logs manage this
                                     ->dehydrated(false)
@@ -88,8 +102,9 @@ class IncubatorResource extends Resource
                                 Forms\Components\TextInput::make('low_stock_cycles')
                                     ->label('Low Stock Cycles')
                                     ->numeric()
+                                    ->step('any')
                                     ->default(2)
-                                    ->minValue(1)
+                                    ->minValue(0.01)
                                     ->required()
                                     ->helperText('Item turns red when stock is below this production-cycle count.'),
                             ]),
@@ -100,21 +115,22 @@ class IncubatorResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(fn (Builder $query) => $query->with('materials'))
+            ->modifyQueryUsing(fn(Builder $query) => $query->with('materials'))
             ->columns([
                 Tables\Columns\TextColumn::make('name')
                     ->label('Product Details')
                     ->searchable()
                     ->sortable()
                     ->weight('bold')
-                    ->description(fn (Incubator $record): string => 'SKU: ' . ($record->sku ?? 'N/A')),
+                    ->description(fn(Incubator $record): string => 'SKU: ' . ($record->sku ?? 'N/A')),
 
                 Tables\Columns\TextColumn::make('current_stock')
                     ->label('Available Stock')
                     ->badge()
-                    ->color(fn (int|float $state, Incubator $record): string => match (true) {
-                        $state < (int) ($record->low_stock_cycles ?? 2) => 'danger',
-                        $state < ((int) ($record->low_stock_cycles ?? 2) * 2) => 'warning',
+                    ->formatStateUsing(fn($state, Incubator $record): string => $state . ' ' . ($record->uom ?? 'pcs'))
+                    ->color(fn(int|float $state, Incubator $record): string => match (true) {
+                        $state < (float) ($record->low_stock_cycles ?? 2) => 'danger',
+                        $state < ((float) ($record->low_stock_cycles ?? 2) * 2) => 'warning',
                         $state <= 0 => 'danger',
                         default => 'success',
                     })
@@ -122,13 +138,13 @@ class IncubatorResource extends Resource
 
                 Tables\Columns\TextColumn::make('cost')
                     ->label('Cost')
-                    ->state(fn (Incubator $record): float => (float) $record->materials->sum(
-                        fn ($material) => ((float) ($material->cost_per_unit ?? 0)) * ((float) ($material->pivot->quantity_required ?? 0))
+                    ->state(fn(Incubator $record): float => (float) $record->materials->sum(
+                        fn($material) => ((float) ($material->cost_per_unit ?? 0)) * ((float) ($material->pivot->quantity_required ?? 0))
                     ))
                     ->money('LKR')
                     ->sortable(false)
                     ->color('warning')
-                    ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin')
+                    ->visible(fn() => \Illuminate\Support\Facades\Auth::user()?->role === 'admin')
                     ->alignEnd(),
 
                 Tables\Columns\TextColumn::make('price')
@@ -136,20 +152,20 @@ class IncubatorResource extends Resource
                     ->money('LKR')
                     ->sortable()
                     ->color('primary')
-                    ->alignEnd(), 
+                    ->alignEnd(),
 
                 Tables\Columns\TextColumn::make('profit_margin')
                     ->label('Profit Margin')
                     ->state(function (Incubator $record): float {
                         $cost = (float) $record->materials->sum(
-                            fn ($material) => ((float) ($material->cost_per_unit ?? 0)) * ((float) ($material->pivot->quantity_required ?? 0))
+                            fn($material) => ((float) ($material->cost_per_unit ?? 0)) * ((float) ($material->pivot->quantity_required ?? 0))
                         );
                         return (float) $record->price - $cost;
                     })
                     ->money('LKR')
                     ->weight('bold')
-                    ->color(fn (float $state): string => $state >= 0 ? 'success' : 'danger')
-                    ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin')
+                    ->color(fn(float $state): string => $state >= 0 ? 'success' : 'danger')
+                    ->visible(fn() => \Illuminate\Support\Facades\Auth::user()?->role === 'admin')
                     ->alignEnd(),
 
                 Tables\Columns\TextColumn::make('created_at')
@@ -161,12 +177,12 @@ class IncubatorResource extends Resource
             ->actions([
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make()
-                    ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
+                    ->visible(fn() => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\DeleteBulkAction::make()
-                        ->visible(fn () => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
+                        ->visible(fn() => \Illuminate\Support\Facades\Auth::user()?->role === 'admin'),
                 ]),
             ]);
     }
@@ -196,9 +212,10 @@ class IncubatorResource extends Resource
         $counter = 1;
 
         while (Incubator::query()
-            ->when($ignoreRecordId, fn ($query) => $query->whereKeyNot($ignoreRecordId))
+            ->when($ignoreRecordId, fn($query) => $query->whereKeyNot($ignoreRecordId))
             ->where('sku', $sku)
-            ->exists()) {
+            ->exists()
+        ) {
             $sku = $base . '-' . str_pad((string) $counter, 2, '0', STR_PAD_LEFT);
             $counter++;
         }

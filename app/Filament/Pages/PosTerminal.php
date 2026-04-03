@@ -146,6 +146,7 @@ class PosTerminal extends Page implements HasForms, HasActions
                         'name'  => $item->name,
                         'price' => $item->price,
                         'stock' => $item->current_stock,
+                        'uom'   => $item->uom,
                     ])
             );
         }
@@ -216,6 +217,7 @@ class PosTerminal extends Page implements HasForms, HasActions
                 'quantity'   => 1,
                 'row_total'  => $price,
                 'stock'      => $record->current_stock,
+                'uom'     => $record->uom ?? 'pcs',
             ];
         }
 
@@ -404,5 +406,24 @@ class PosTerminal extends Page implements HasForms, HasActions
         $this->search         = '';
         $this->activeCategory = 'all';
         $this->isCreditSale   = false; // Reset back to full pay for next customer
+    }
+
+    public function updateQuantity(string $key, mixed $newQty): void
+    {
+        if (!isset($this->cart[$key])) return;
+
+        $qty = max(0.01, (float) $newQty);
+
+        if ($qty <= $this->cart[$key]['stock']) {
+            $this->cart[$key]['quantity'] = $qty;
+            $this->cart[$key]['row_total'] = $qty * $this->cart[$key]['unit_price'];
+        } else {
+            // Revert to max available if they type too much
+            $this->cart[$key]['quantity'] = $this->cart[$key]['stock'];
+            $this->cart[$key]['row_total'] = $this->cart[$key]['stock'] * $this->cart[$key]['unit_price'];
+            Notification::make()->title('Exceeds available stock!')->warning()->send();
+        }
+
+        $this->calculateTotal();
     }
 }

@@ -44,7 +44,8 @@ class ProductionLogResource extends Resource
                             ->label('Quantity Built')
                             ->required()
                             ->numeric()
-                            ->minValue(1)
+                            ->step('any') // ALLOWS DECIMALS for kg, m, l, etc.
+                            ->minValue(0.01) // Lowered from 1 to allow fractional production
                             ->live(onBlur: true)
                             // 1. Reactive Warning for the UI
                             ->afterStateUpdated(function ($state, Forms\Get $get) {
@@ -104,6 +105,8 @@ class ProductionLogResource extends Resource
                     ->searchable(),
                 Tables\Columns\TextColumn::make('quantity_produced')
                     ->label('Qty Built')
+                    // Optional: You can append the unit of measure here if you eager load the incubator
+                    ->formatStateUsing(fn ($state, ProductionLog $record) => $state . ' ' . ($record->incubator->uom ?? 'pcs'))
                     ->sortable(),
                 Tables\Columns\TextColumn::make('production_date')
                     ->date()
