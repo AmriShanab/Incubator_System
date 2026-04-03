@@ -20,7 +20,7 @@ class UserRoleSeeder extends Seeder
             ['email' => 'cashier@sntech.com'],
             [
                 'name' => 'Main Cashier',
-                'password' => Hash::make('passwor123'),
+                'password' => Hash::make('password123'),
                 'role' => 'cashier',
             ]
         );
