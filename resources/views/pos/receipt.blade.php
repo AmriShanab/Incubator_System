@@ -183,8 +183,8 @@
             
             <div class="store-name">SN TECH</div>
             <div class="store-address">
-                No. 45, Main Street, Puttalam<br>
-                Sri Lanka | Tel: 077 123 4567
+                No:5/19 Poles Road Left (IBM complex) Puttalam<br>
+                Sri Lanka | Tel: 0761023168 0776969467
             </div>
         </div>
 
