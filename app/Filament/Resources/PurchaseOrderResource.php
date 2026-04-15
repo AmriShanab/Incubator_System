@@ -117,20 +117,24 @@ class PurchaseOrderResource extends Resource
                                     ->required(),
 
                                 Forms\Components\Select::make('account_id')
-                                    ->relationship('account', 'name')
-                                    ->label('Pay From')
+                                    // 1. Manually fetch options to include cash, bank, and credit_payable
+                                    ->options(function () {
+                                        return \App\Models\Account::whereIn('type', ['cash', 'bank', 'credit_payable'])
+                                            ->orWhereNull('type')
+                                            ->pluck('name', 'id');
+                                    })
+                                    ->label('Pay From / Credit Account')
                                     ->required()
                                     ->preload()
                                     ->searchable()
                                     ->native(false)
-                                    // ADD THIS NEW RULES BLOCK:
                                     ->rules([
                                         fn(Forms\Get $get): \Closure => function (string $attribute, $value, \Closure $fail) use ($get) {
                                             $account = \App\Models\Account::find($value);
-                                            // Re-calculate the grand total to check against the bank balance
                                             $totalAmount = collect($get('items'))->sum(fn($item) => (float) ($item['row_total'] ?? 0));
 
-                                            if ($account && $totalAmount > $account->balance) {
+                                            // 2. Only block the sale if it's NOT a credit payable account
+                                            if ($account && $account->type !== 'credit_payable' && $totalAmount > $account->balance) {
                                                 $fail("Insufficient funds. Order costs LKR " . number_format($totalAmount, 2) . " but account only has LKR " . number_format($account->balance, 2));
                                             }
                                         },
@@ -186,10 +190,12 @@ class PurchaseOrderResource extends Resource
                         default => 'gray',
                     }),
 
+                // FIX: Dynamically show a red warning if it's on credit
                 Tables\Columns\TextColumn::make('account.name')
                     ->label('Paid Via')
                     ->badge()
-                    ->color('info')
+                    ->color(fn(PurchaseOrder $record) => $record->account?->type === 'credit_payable' ? 'danger' : 'info')
+                    ->formatStateUsing(fn(string $state, PurchaseOrder $record) => $record->account?->type === 'credit_payable' ? 'Unpaid (Credit)' : $state)
                     ->sortable(),
 
                 Tables\Columns\TextColumn::make('total_amount')
@@ -211,18 +217,40 @@ class PurchaseOrderResource extends Resource
                     ->color('success')
                     ->requiresConfirmation()
                     ->modalHeading('Receive Inventory?')
-                    ->modalDescription('This will add these items to stock, update cost prices, and deduct money from your account\'s Investment Capital Pool.')
+                    ->modalDescription('This will add these items to your physical stock and update material cost prices.')
                     ->visible(fn(PurchaseOrder $record) => $record->status === 'ordered')
-                    ->action(function (PurchaseOrder $record) {
-                        foreach ($record->items as $item) {
-                            $material = $item->material;
-                            if ($material) {
-                                $material->increment('current_stock', $item->quantity);
-                                $material->update(['cost_per_unit' => $item->unit_cost]);
-                            }
+                    ->action(function (PurchaseOrder $record, \App\Services\PurchaseService $service) {
+                        try {
+                            $service->receiveOrder($record);
+                            Notification::make()->title('Goods Received and Stocked')->success()->send();
+                        } catch (\Exception $e) {
+                            Notification::make()->title('Error')->body($e->getMessage())->danger()->send();
                         }
-                        $record->update(['status' => 'received']);
-                        Notification::make()->title('Goods Received')->success()->send();
+                    }),
+
+                // NEW: Action to settle the debt
+                Tables\Actions\Action::make('settle_debt')
+                    ->label('Settle Debt')
+                    ->icon('heroicon-m-banknotes')
+                    ->color('danger')
+                    ->visible(fn(PurchaseOrder $record) => $record->account && $record->account->type === 'credit_payable')
+                    ->form([
+                        Forms\Components\Select::make('payment_account_id')
+                            ->label('Pay From')
+                            ->options(function () {
+                                return \App\Models\Account::whereIn('type', ['cash', 'bank'])
+                                    ->pluck('name', 'id');
+                            })
+                            ->required()
+                            ->native(false),
+                    ])
+                    ->action(function (array $data, PurchaseOrder $record, \App\Services\PurchaseService $service) {
+                        try {
+                            $service->settleCreditOrder($record, (int) $data['payment_account_id']);
+                            Notification::make()->title('Debt Settled Successfully')->success()->send();
+                        } catch (\Exception $e) {
+                            Notification::make()->title('Settlement Failed')->body($e->getMessage())->danger()->send();
+                        }
                     }),
             ]);
     }

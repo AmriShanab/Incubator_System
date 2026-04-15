@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Account extends Model
 {
-    protected $fillable = ['name', 'balance', 'capital_pool', 'profit_pool'];
+    protected $fillable = ['name', 'type', 'balance', 'capital_pool', 'profit_pool'];
 
     public function transactions(): HasMany
     {

@@ -8,6 +8,7 @@ use App\Models\Accessory;
 use App\Models\Customer;
 use App\Models\Account;
 use App\Models\Invoice;
+use App\Services\CheckoutService;
 use Illuminate\Support\Facades\DB;
 use Filament\Notifications\Notification;
 use Filament\Support\Enums\MaxWidth;
@@ -18,6 +19,9 @@ use Filament\Actions\Concerns\InteractsWithActions;
 use Filament\Actions\Contracts\HasActions;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
+
+// 1. ADD THIS IMPORT FOR SESSION RECOVERY
+use Livewire\Attributes\Session;
 
 class PosTerminal extends Page implements HasForms, HasActions
 {
@@ -35,24 +39,36 @@ class PosTerminal extends Page implements HasForms, HasActions
     public string $search        = '';
     public string $activeCategory = 'all';
 
-    // ── Cart ──────────────────────────────────────────────────
+    // ── Cart (CACHED) ─────────────────────────────────────────
+    #[Session]
     public array $cart = [];
 
     // ── Financials ────────────────────────────────────────────
-    public float  $subTotal      = 0;
-    public string $discountType  = 'amount'; // 'amount' | 'percentage'
-    public mixed  $discountValue = 0;
+    public float  $subTotal       = 0;
+    
+    #[Session]
+    public string $discountType   = 'amount'; // 'amount' | 'percentage'
+    
+    #[Session]
+    public mixed  $discountValue  = 0;
+    
     public float  $discountAmount = 0;
-    public float  $grandTotal    = 0;
+    public float  $grandTotal     = 0;
 
-    // ── Checkout ──────────────────────────────────────────────
+    // ── Checkout (CACHED) ─────────────────────────────────────
+    #[Session]
     public mixed  $customerId     = null;
+    
     public array  $customers      = [];
+    
+    #[Session]
     public mixed  $accountId      = null;
+    
     public array  $paymentMethods = [];
     public mixed  $amountPaid     = 0;
 
     // ──────────────────────────────────────────────────────────
+    #[Session]
     public bool $isCreditSale = false;
 
 
@@ -65,12 +81,19 @@ class PosTerminal extends Page implements HasForms, HasActions
     {
         $this->loadCustomers();
 
-        $this->paymentMethods = Account::where('name', '!=', 'Accounts Receivable')
+        $this->paymentMethods = Account::where('type', '!=', 'credit_receivable')
+            ->orWhereNull('type')
             ->pluck('name', 'id')
             ->toArray();
 
-        $this->accountId = Account::where('name', 'Cash')->first()?->id
-            ?? array_key_first($this->paymentMethods);
+        // FIX: Only set a default account if the Session didn't just load one!
+        if (! $this->accountId) {
+            $this->accountId = Account::where('type', 'cash')->first()?->id
+                ?? array_key_first($this->paymentMethods);
+        }
+
+        // FIX: If the page was refreshed and the cart was recovered, recalculate the totals immediately.
+        $this->calculateTotal();
     }
 
     // ── Customers ─────────────────────────────────────────────
@@ -84,6 +107,7 @@ class PosTerminal extends Page implements HasForms, HasActions
 
         $this->customers = Customer::pluck('name', 'id')->toArray();
 
+        // Only set default if the session didn't recover a customer
         if (! $this->customerId) {
             $this->customerId = $walkIn->id;
         }
@@ -108,7 +132,6 @@ class PosTerminal extends Page implements HasForms, HasActions
             });
     }
 
-    // ── Product catalogue (computed properties) ───────────────
 
     public function getCategoriesProperty(): array
     {
@@ -151,7 +174,6 @@ class PosTerminal extends Page implements HasForms, HasActions
             );
         }
 
-        // Accessories
         if ($this->activeCategory !== 'incubators') {
             $query = Accessory::where('name', 'like', $like);
 
@@ -166,6 +188,7 @@ class PosTerminal extends Page implements HasForms, HasActions
                     'name'  => $item->name,
                     'price' => $item->selling_price,
                     'stock' => $item->current_stock,
+                    'uom'   => $item->uom ?? 'pcs',
                 ])
             );
         }
@@ -217,7 +240,7 @@ class PosTerminal extends Page implements HasForms, HasActions
                 'quantity'   => 1,
                 'row_total'  => $price,
                 'stock'      => $record->current_stock,
-                'uom'     => $record->uom ?? 'pcs',
+                'uom'        => $record->uom ?? 'pcs',
             ];
         }
 
@@ -341,58 +364,37 @@ class PosTerminal extends Page implements HasForms, HasActions
     }
 
     // ── Process Sale ──────────────────────────────────────────
-
-    public function processSale(): void
+    public function processSale(CheckoutService $service): void
     {
         if (empty($this->cart) || $this->grandTotal <= 0) {
-            Notification::make()->title('Cart is empty or total is zero')->danger()->send();
+            Notification::make()->title('Empty Cart')->danger()->send();
             return;
         }
 
-        $actualPaid = min((float) $this->amountPaid, $this->grandTotal);
+        if (!$this->accountId) {
+            Notification::make()
+                ->title('Payment Method Required')
+                ->body('Please select an account to receive the payment.')
+                ->danger()
+                ->send();
+            return;
+        }
 
-        $paymentStatus = match (true) {
-            $actualPaid >= $this->grandTotal => 'paid',
-            $actualPaid > 0                  => 'partial',
-            default                          => 'credit',
-        };
+        try {
+            $invoice = $service->processSale(
+                $this->cart,
+                (float) $this->amountPaid,
+                (int) $this->customerId,
+                (int) $this->accountId,
+                (float) $this->discountAmount
+            );
 
-        $invoice = DB::transaction(function () use ($actualPaid, $paymentStatus) {
-
-            $created = Invoice::create([
-                'customer_id'    => $this->customerId,
-                'invoice_date'   => now(),
-                'status'         => 'draft',
-                'payment_method' => Account::find($this->accountId)?->name ?? 'Cash',
-                'account_id'     => $this->accountId,
-                'total_amount'   => $this->grandTotal,
-                'amount_paid'    => $actualPaid,
-                'payment_status' => $paymentStatus,
-            ]);
-
-            foreach ($this->cart as $item) {
-                $created->items()->create([
-                    'sellable_type' => $item['type'],
-                    'sellable_id'   => $item['id'],
-                    'quantity'      => $item['quantity'],
-                    'unit_price'    => $item['unit_price'],
-                    'unit_cost'     => $item['unit_cost'],
-                    'row_total'     => $item['row_total'],
-                ]);
-
-                $product = $item['type']::find($item['id']);
-                $product?->decrement('current_stock', $item['quantity']);
-            }
-
-            $created->update(['status' => 'delivered']);
-
-            return $created;
-        });
-
-        Notification::make()->title('Sale Completed!')->success()->send();
-        $this->dispatch('print-receipt', ['invoiceId' => $invoice->id]);
-
-        $this->resetAfterSale();
+            Notification::make()->title('Sale Completed!')->success()->send();
+            $this->dispatch('print-receipt', ['invoiceId' => $invoice->id]);
+            $this->resetAfterSale();
+        } catch (\Exception $e) {
+            Notification::make()->title('Sale Failed')->body($e->getMessage())->danger()->send();
+        }
     }
 
     private function resetAfterSale(): void
@@ -405,7 +407,11 @@ class PosTerminal extends Page implements HasForms, HasActions
         $this->amountPaid     = 0;
         $this->search         = '';
         $this->activeCategory = 'all';
-        $this->isCreditSale   = false; // Reset back to full pay for next customer
+        $this->isCreditSale   = false; 
+        
+        // Ensure defaults are reset properly for the next sale
+        $this->loadCustomers();
+        $this->accountId = Account::where('type', 'cash')->first()?->id ?? array_key_first($this->paymentMethods);
     }
 
     public function updateQuantity(string $key, mixed $newQty): void

@@ -4,13 +4,11 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\SalesReturnResource\Pages;
 use App\Models\SalesReturn;
-use App\Models\Transaction; 
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
-use Illuminate\Support\Facades\DB;
 use Filament\Notifications\Notification;
 
 class SalesReturnResource extends Resource
@@ -46,7 +44,6 @@ class SalesReturnResource extends Resource
                                     ->preload()
                                     ->required()
                                     ->reactive()
-                                    // Auto-fill the refund amount to the invoice total for convenience
                                     ->afterStateUpdated(function ($state, Forms\Set $set) {
                                         if ($state) {
                                             $invoice = \App\Models\Invoice::find($state);
@@ -98,7 +95,6 @@ class SalesReturnResource extends Resource
                     ->prefix('INV-')
                     ->searchable()
                     ->sortable()
-                    // Shows the customer name directly under the invoice number
                     ->description(fn (SalesReturn $record): string => $record->invoice->customer->name ?? 'Unknown Customer'),
 
                 Tables\Columns\TextColumn::make('return_date')
@@ -127,7 +123,6 @@ class SalesReturnResource extends Resource
             ->actions([
                 Tables\Actions\EditAction::make(),
 
-                // THE LOGIC BUTTON: PROCESS RETURN & REFUND CASH
                 Tables\Actions\Action::make('complete')
                     ->label('Process Refund')
                     ->icon('heroicon-m-arrow-path')
@@ -136,7 +131,6 @@ class SalesReturnResource extends Resource
                     ->modalHeading('Process Return & Refund?')
                     ->modalDescription('Please select which account you are taking the refund money out of. This will restock inventory and deduct the funds.')
                     ->visible(fn($record) => $record->status === 'pending')
-                    // 1. ADD A FORM TO CHOOSE THE EXACT REFUND ACCOUNT
                     ->form(fn (SalesReturn $record) => [
                         Forms\Components\Placeholder::make('refund_display')
                             ->label('Amount to Refund')
@@ -146,11 +140,9 @@ class SalesReturnResource extends Resource
                         Forms\Components\Select::make('refund_account_id')
                             ->label('Issue Refund From (Account)')
                             ->options(\App\Models\Account::pluck('name', 'id'))
-                            // Default to the original invoice account, but let you change it!
                             ->default(fn() => $record->invoice->account_id) 
                             ->required()
                             ->native(false)
-                            // Form-level validation
                             ->rules([
                                 fn (): \Closure => function (string $attribute, $value, \Closure $fail) use ($record) {
                                     $account = \App\Models\Account::find($value);
@@ -160,82 +152,23 @@ class SalesReturnResource extends Resource
                                 },
                             ]),
                     ])
-                    ->action(function (SalesReturn $record, array $data) {
-                        $refundAmount = (float) $record->refund_amount;
-                        $account = \App\Models\Account::find($data['refund_account_id']);
+                    ->action(function (SalesReturn $record, array $data, \App\Services\SalesReturnService $service) {
+                        try {
+                            $service->processRefund($record, $data['refund_account_id']);
+                            
+                            Notification::make()
+                                ->title('Refund Processed')
+                                ->body('Inventory restocked and funds deducted successfully.')
+                                ->success()
+                                ->send();
 
-                        // HARD CHECK: Absolutely prevent negative balance before touching the database
-                        if (!$account || $account->balance < $refundAmount) {
+                        } catch (\Exception $e) {
                             Notification::make()
                                 ->title('Refund Failed')
-                                ->body("Insufficient funds! The account '{$account->name}' only has LKR " . number_format($account->balance ?? 0, 2) . " available.")
+                                ->body($e->getMessage())
                                 ->danger()
                                 ->send();
-                            
-                            return; // Stop the action immediately!
                         }
-
-                        // If funds are sufficient, proceed with the transaction
-                        DB::transaction(function () use ($record, $account, $refundAmount) {
-                            $invoice = $record->invoice;
-                            
-                            // 1. PUT THE ITEMS BACK IN STOCK AND CALCULATE EXACT CAPITAL COST
-                            $totalCapitalCost = 0;
-
-                            foreach ($invoice->items as $item) {
-                                $product = $item->sellable;
-                                
-                                if ($product) {
-                                    // Restock
-                                    $product->increment('current_stock', $item->quantity);
-                                }
-
-                                // We saved the exact unit_cost when we made the invoice! 
-                                // Multiply it by quantity to find exactly how much this item cost us to build.
-                                $totalCapitalCost += ((float) ($item->unit_cost ?? 0)) * $item->quantity;
-                            }
-
-                            // 2. DEDUCT THE MONEY FROM THE SELECTED LEDGER
-                            if ($account && $refundAmount > 0) {
-                                
-                                // The profit we are losing is the total refund minus the cost of the goods
-                                $profitToDeduct = $refundAmount - $totalCapitalCost;
-
-                                // Prevent negative profit deductions just in case of weird manual overrides
-                                if ($profitToDeduct < 0) {
-                                    $profitToDeduct = 0;
-                                }
-
-                                // Create the ledger entry
-                                Transaction::create([
-                                    'account_id' => $account->id,
-                                    'type' => 'out',
-                                    'amount' => $refundAmount,
-                                    'description' => "Refund issued for INV-{$invoice->id}. Capital: LKR {$totalCapitalCost}, Profit: LKR {$profitToDeduct}",
-                                    'reference_type' => SalesReturn::class,
-                                    'reference_id' => $record->id,
-                                    'transaction_date' => now(),
-                                ]);
-
-                                // A. Deduct from the overall Wallet balance
-                                $account->decrement('balance', $refundAmount);
-                                
-                                // B. Accurately remove the protected Capital money
-                                $account->decrement('capital_pool', $totalCapitalCost);
-                                
-                                // C. Accurately remove the lost markup from the Free Profit
-                                $account->decrement('profit_pool', $profitToDeduct);
-                            }
-
-                            // 3. MARK AS COMPLETED
-                            $record->update(['status' => 'completed']);
-                        });
-
-                        Notification::make()
-                            ->title('Refund Processed')
-                            ->body('Inventory restocked and funds deducted from the selected account.')
-                            ->success()
-                            ->send();
                     }),
             ])
             ->bulkActions([

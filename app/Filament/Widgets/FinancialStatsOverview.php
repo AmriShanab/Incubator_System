@@ -11,6 +11,7 @@ class FinancialStatsOverview extends BaseWidget
 {
     protected static bool $isLazy = false;
     protected int | string | array $columnSpan = 'full';
+    protected static ?int $sort = 1;
 
     public static function canView(): bool
     {
@@ -18,13 +19,10 @@ class FinancialStatsOverview extends BaseWidget
     }
     protected function getStats(): array
     {
-        // Calculate all money IN (Invoices & Settlements)
+        
         $revenue = Transaction::where('type', 'in')->sum('amount');
-
-        // Calculate all money OUT (Purchases & General Expenses)
         $expenses = Transaction::where('type', 'out')->sum('amount');
 
-        // The bottom line
         $netProfit = $revenue - $expenses;
 
         return [
@@ -32,7 +30,7 @@ class FinancialStatsOverview extends BaseWidget
                 ->description('All incoming cash')
                 ->descriptionIcon('heroicon-m-arrow-trending-up')
                 ->color('success')
-                ->chart([7, 2, 10, 3, 15, 4, 17]), // Optional: Adds a little background sparkline
+                ->chart([7, 2, 10, 3, 15, 4, 17]), 
 
             Stat::make('Total Expenses', 'LKR ' . number_format($expenses, 2))
                 ->description('Purchases, Fees, & Bills')

@@ -30,7 +30,7 @@ class AdminPanelProvider extends PanelProvider
             ->path('admin')
             ->login()
             ->brandLogo(asset('img/logo.png'))
-            ->brandLogoHeight('4rem') // Slightly less than the topbar height for padding
+            ->brandLogoHeight('4rem')
             ->renderHook(
                 'panels::head.end',
                 fn(): string => Blade::render('<style>
@@ -47,13 +47,8 @@ class AdminPanelProvider extends PanelProvider
             </style>'),
             )
             ->font('Poppins', provider: GoogleFontProvider::class)
-
-
-
-            // --- ENABLE DARK MODE TOGGLE ---
             ->darkMode(true)
             ->darkModeBrandLogo(asset('img/logo-white-removebg-preview.png'))
-
             ->brandName('SN Tech')
             ->colors([
                 'primary' => Color::Teal,

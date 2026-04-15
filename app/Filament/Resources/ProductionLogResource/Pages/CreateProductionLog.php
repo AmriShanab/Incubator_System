@@ -3,79 +3,44 @@
 namespace App\Filament\Resources\ProductionLogResource\Pages;
 
 use App\Filament\Resources\ProductionLogResource;
-use App\Models\Incubator;
-use Filament\Notifications\Notification;
 use Filament\Resources\Pages\CreateRecord;
-use Illuminate\Support\Facades\DB;
+use App\Services\ProductionService;
+use Illuminate\Database\Eloquent\Model;
+use Filament\Notifications\Notification;
+use App\Models\ProductionLog; // <-- Make sure to import your model
 
 class CreateProductionLog extends CreateRecord
 {
     protected static string $resource = ProductionLogResource::class;
 
-    // FIXED: Spelled "beforeCreate" correctly so Filament actually runs it
-    protected function beforeCreate(): void
+    /**
+     * Hijack Filament's default save behavior and route it through our Service.
+     */
+    protected function handleRecordCreation(array $data): Model
     {
-        $incubatorId = $this->data['incubator_id'];
-        $quantityProduced = $this->data['quantity_produced'];
+        $service = app(ProductionService::class);
 
-        $incubator = Incubator::with('materials')->find($incubatorId);
-
-        if(!$incubator || $incubator->materials->isEmpty()){
+        try {
+            return $service->logProduction(
+                incubatorId: (int) $data['incubator_id'],
+                quantity: (float) $data['quantity_produced'],
+                date: $data['production_date']
+            );
+        } catch (\Exception $e) {
             Notification::make()
-            ->danger()
-            ->title('Missing Bill Of Materials')
-            ->body("This product does not have any materials assigned to it. Please add supplies first.")
-            ->send();
+                ->danger()
+                ->title('Production Blocked')
+                ->body($e->getMessage()) 
+                ->persistent()
+                ->send();
 
             $this->halt();
-        }
-
-        foreach ($incubator->materials as $key => $material) {
-            // FIXED: Using 'quantity_required' to match your afterCreate logic
-            $needed = $material->pivot->quantity_required * $quantityProduced;
-
-            // FIXED: Using 'current_stock' to match your Material database column
-            if ($material->current_stock < $needed) {
-                Notification::make()
-                    ->danger()
-                    ->title('Stock Shortage: ' . $material->name)
-                    ->body("You need {$needed} but only have {$material->current_stock} in stock. Production blocked.")
-                    ->persistent() 
-                    ->send();
-                
-                $this->halt(); // STOPS THE CREATION
-            }
+            return new ProductionLog();
         }
     }
 
-    protected function afterCreate(): void
+    protected function getRedirectUrl(): string
     {
-        $log = $this->record;
-        $incubator = $log->incubator; 
-        
-        $incubator->load('materials');
-
-        $qtyBuilt = $log->quantity_produced;
-        $deductedMaterials = [];
-
-        DB::transaction(function () use ($incubator, $qtyBuilt, &$deductedMaterials) {
-            foreach ($incubator->materials as $material) {
-                $requiredPerUnit = $material->pivot->quantity_required;
-                $totalToDeduct = $requiredPerUnit * $qtyBuilt;
-                
-                // Perform the deduction
-                $material->decrement('current_stock', $totalToDeduct);
-                
-                $deductedMaterials[] = "{$material->name}: -{$totalToDeduct} {$material->unit}";
-            }
-            // Assuming your Incubator model also uses 'current_stock'
-            $incubator->increment('current_stock', $qtyBuilt);
-        });
-
-        Notification::make()
-            ->title('Stock Deducted Successfully')
-            ->body(implode("\n", $deductedMaterials))
-            ->success()
-            ->send();
+        return $this->getResource()::getUrl('index');
     }
 }

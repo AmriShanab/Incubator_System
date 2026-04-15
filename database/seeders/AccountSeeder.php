@@ -48,5 +48,15 @@ class AccountSeeder extends Seeder
                 'profit_pool' => 0,
             ]
         );
+
+        Account::updateOrCreate(
+            ['name' => 'Accounts Payable (Suppliers)'],
+            ['type' => 'credit_payable'],
+            [
+                'balance' => 0,
+                'capital_pool' => 0,
+                'profit_pool' => 0,
+            ]
+        );
     }
 }
