@@ -373,6 +373,7 @@ class InvoiceResource extends Resource
                         ->action(fn(Invoice $record) => $record->update(['status' => 'delivered'])),
 
                     // ── FIX: Receive Payment (Now respects the specific Invoice's pending Account) ──
+                    // ── FIX: Receive Payment (Explicitly pulls from Accounts Receivable) ──
                     Tables\Actions\Action::make('receive_payment')
                         ->label('Receive Payment')
                         ->icon('heroicon-m-banknotes')
@@ -406,11 +407,12 @@ class InvoiceResource extends Resource
                             DB::transaction(function () use ($record, $data) {
                                 $paidNow = (float) $data['payment_amount'];
                                 $destAccount = \App\Models\Account::find($data['account_id']);
-                                
-                                // NEW: Dynamically pull from the exact account holding this debt (COD, AR, etc.)
-                                $pendingAccount = $record->account; 
 
-                                if (!$destAccount || !$pendingAccount) return;
+                                // FIX: Debt ALWAYS lives in Accounts Receivable for Credit/Partial sales
+                                $arAccount = \App\Models\Account::where('type', 'credit_receivable')->first()
+                                    ?? \App\Models\Account::where('name', 'Accounts Receivable')->first();
+
+                                if (!$destAccount || !$arAccount) return;
 
                                 // Recalculate how much capital vs profit we are collecting right now
                                 $oldAmountPaid = $record->amount_paid;
@@ -419,17 +421,17 @@ class InvoiceResource extends Resource
                                 $recoveredCapital = min($paidNow, $remainingCapitalToRecover);
                                 $recoveredProfit = max(0, $paidNow - $recoveredCapital);
 
-                                // 1. Pull the money OUT of the pending pool (COD, AR, etc.)
+                                // 1. Pull the money OUT of Accounts Receivable (Reduces the debt!)
                                 $record->transactions()->create([
-                                    'account_id' => $pendingAccount->id,
+                                    'account_id' => $arAccount->id,
                                     'type' => 'out',
                                     'amount' => $paidNow,
                                     'description' => "Debt collected for Invoice #{$record->id}",
                                     'transaction_date' => now()->toDateString(),
                                 ]);
-                                $pendingAccount->decrement('balance', $paidNow);
-                                $pendingAccount->decrement('capital_pool', $recoveredCapital);
-                                $pendingAccount->decrement('profit_pool', $recoveredProfit);
+
+                                $arAccount->decrement('balance', $paidNow);
+                                // Note: We don't touch AR's capital/profit pools because it is a tracking account, not liquid cash.
 
                                 // 2. Put the physical cash INTO the actual Cash/Bank account
                                 $record->transactions()->create([
@@ -439,6 +441,7 @@ class InvoiceResource extends Resource
                                     'description' => "Late payment received for Invoice #{$record->id}",
                                     'transaction_date' => now()->toDateString(),
                                 ]);
+
                                 $destAccount->increment('balance', $paidNow);
                                 $destAccount->increment('capital_pool', $recoveredCapital);
                                 $destAccount->increment('profit_pool', $recoveredProfit);
@@ -450,6 +453,8 @@ class InvoiceResource extends Resource
                                 $record->updateQuietly([
                                     'amount_paid' => $newTotalPaid,
                                     'payment_status' => $newStatus,
+                                    // Update the account_id to the cash account if fully paid
+                                    'account_id' => $newStatus === 'paid' ? $destAccount->id : $record->account_id,
                                 ]);
                             });
 
