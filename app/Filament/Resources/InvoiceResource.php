@@ -463,7 +463,7 @@ class InvoiceResource extends Resource
                                 ->success()
                                 ->send();
                         }),
-
+    
                     Tables\Actions\Action::make('cancel')
                         ->label('Cancel Invoice')
                         ->icon('heroicon-m-x-circle')
@@ -476,7 +476,7 @@ class InvoiceResource extends Resource
                         ->label('Print Invoice')
                         ->icon('heroicon-m-printer')
                         ->color('gray')
-                        ->url(fn(Invoice $record) => route('invoice.print', $record))
+                        ->url(fn(Invoice $record) => route('pos.receipt', $record))
                         ->openUrlInNewTab(),
                 ]),
             ]);
