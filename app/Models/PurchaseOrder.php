@@ -34,24 +34,24 @@ class PurchaseOrder extends Model
         return $this->morphMany(Transaction::class, 'reference');
     }
 
-    protected static function booted()
-    {
-        static::updated(function ($po) {
-            if ($po->isDirty('status') && $po->status === 'received') {
-                if ($po->account_id && $po->total_amount > 0 && !$po->transactions()->exists()) {
-                    DB::transaction(function () use ($po) {
-                        $po->transactions()->create([
-                            'account_id' => $po->account_id,
-                            'type' => 'out',
-                            'amount' => $po->total_amount,
-                            'description' => "Payment sent for Purchase Order #{$po->id} to Supplier",
-                            'transaction_date' => now()->toDateString(),
-                        ]);
-                        $po->account->decrement('balance', $po->total_amount);
-                        $po->account->decrement('capital_pool', $po->total_amount);
-                    });
-                }
-            }
-        });
-    }
+    // protected static function booted()
+    // {
+    //     static::updated(function ($po) {
+    //         if ($po->isDirty('status') && $po->status === 'received') {
+    //             if ($po->account_id && $po->total_amount > 0 && !$po->transactions()->exists()) {
+    //                 DB::transaction(function () use ($po) {
+    //                     $po->transactions()->create([
+    //                         'account_id' => $po->account_id,
+    //                         'type' => 'out',
+    //                         'amount' => $po->total_amount,
+    //                         'description' => "Payment sent for Purchase Order #{$po->id} to Supplier",
+    //                         'transaction_date' => now()->toDateString(),
+    //                     ]);
+    //                     $po->account->decrement('balance', $po->total_amount);
+    //                     $po->account->decrement('capital_pool', $po->total_amount);
+    //                 });
+    //             }
+    //         }
+    //     });
+    // }
 }
