@@ -14,16 +14,16 @@ class PurchaseService
         return DB::transaction(function () use ($data, $items) {
             $totalAmount = (float) $data['total_amount'];
 
-            // 1. Create the Order Document (No money moves yet)
             $order = PurchaseOrder::create([
                 'supplier_id' => $data['supplier_id'],
                 'account_id'  => $data['account_id'],
                 'order_date'  => $data['order_date'],
                 'status'      => 'ordered',
-                'total_amount'=> $totalAmount,
+                'total_amount' => $totalAmount,
+                'amount_paid' => 0,
+                'payment_status' => 'credit',
             ]);
 
-            // 2. Attach the Items
             foreach ($items as $item) {
                 $order->items()->create([
                     'purchasable_type' => $item['purchasable_type'],
@@ -46,24 +46,18 @@ class PurchaseService
             }
 
             $totalAmount = $order->total_amount;
-            
-            // Lock the account to prevent race conditions during receipt
             $account = Account::lockForUpdate()->findOrFail($order->account_id);
             $isCreditPurchase = $account->type === 'credit_payable';
 
-            // Check if we have enough cash (if paying immediately on delivery)
             if (!$isCreditPurchase && $account->balance < $totalAmount) {
                 throw new \Exception("Insufficient funds in the selected account to pay for these goods.");
             }
 
-            // ──────────────────────────────────────────────────────────
-            // STEP A: UPDATE PHYSICAL INVENTORY & COSTS
-            // ──────────────────────────────────────────────────────────
+            // A: Update Inventory
             foreach ($order->items as $item) {
                 $purchasable = $item->purchasable;
                 if ($purchasable) {
                     $purchasable->increment('current_stock', (float) $item->quantity);
-                    
                     if (class_basename($purchasable) === 'Material') {
                         $purchasable->update(['cost_per_unit' => $item->unit_cost]);
                     } elseif (class_basename($purchasable) === 'Accessory') {
@@ -72,28 +66,24 @@ class PurchaseService
                 }
             }
 
-            // ──────────────────────────────────────────────────────────
-            // STEP B: EXECUTE FINANCIAL TRANSACTIONS
-            // ──────────────────────────────────────────────────────────
+            // B: Financials & Status
             if ($isCreditPurchase) {
-                // We received the goods on credit -> Increase our Debt (Accounts Payable)
                 Transaction::create([
                     'account_id'       => $account->id,
-                    'type'             => 'in', // 'in' means liability/debt increased
+                    'type'             => 'in',
                     'amount'           => $totalAmount,
                     'description'      => "Purchase Order #{$order->id} Received (Debt Added)",
                     'reference_type'   => PurchaseOrder::class,
                     'reference_id'     => $order->id,
                     'transaction_date' => now(),
                 ]);
-                
-                $account->increment('balance', $totalAmount);
 
+                $account->increment('balance', $totalAmount);
+                $order->update(['status' => 'received', 'payment_status' => 'credit', 'amount_paid' => 0]);
             } else {
-                // We paid upfront -> Decrease Cash Drawer & Pools
                 Transaction::create([
                     'account_id'       => $account->id,
-                    'type'             => 'out', // 'out' means cash left the business
+                    'type'             => 'out',
                     'amount'           => $totalAmount,
                     'description'      => "Purchase Order #{$order->id} Received (Paid)",
                     'reference_type'   => PurchaseOrder::class,
@@ -102,7 +92,6 @@ class PurchaseService
                 ]);
 
                 $account->decrement('balance', $totalAmount);
-
                 if ($account->capital_pool >= $totalAmount) {
                     $account->decrement('capital_pool', $totalAmount);
                 } else {
@@ -110,36 +99,39 @@ class PurchaseService
                     $account->update(['capital_pool' => 0]);
                     $account->decrement('profit_pool', $remaining);
                 }
-            }
 
-            // ──────────────────────────────────────────────────────────
-            // STEP C: MARK ORDER AS COMPLETED
-            // ──────────────────────────────────────────────────────────
-            $order->update(['status' => 'received']);
+                $order->update(['status' => 'received', 'payment_status' => 'paid', 'amount_paid' => $totalAmount]);
+            }
         });
     }
 
-    public function settleCreditOrder(PurchaseOrder $order, int $cashAccountId): void
+    // UPDATED: Now accepts $paymentAmount for partial payments!
+    public function settleCreditOrder(PurchaseOrder $order, int $cashAccountId, float $paymentAmount): void
     {
-        DB::transaction(function () use ($order, $cashAccountId) {
+        DB::transaction(function () use ($order, $cashAccountId, $paymentAmount) {
             $payableAccount = $order->account;
             if ($payableAccount->type != 'credit_payable') {
                 throw new \Exception("This order is not a credit purchase.");
             }
 
-            $cashAccount = Account::lockForUpdate()->findOrFail($cashAccountId);
-            $amount = $order->total_amount;
+            // Prevent overpaying
+            $balanceDue = $order->total_amount - $order->amount_paid;
+            if ($paymentAmount > $balanceDue) {
+                throw new \Exception("Payment exceeds the remaining balance of LKR " . number_format($balanceDue, 2));
+            }
 
-            if ($cashAccount->balance < $amount) {
+            $cashAccount = Account::lockForUpdate()->findOrFail($cashAccountId);
+
+            if ($cashAccount->balance < $paymentAmount) {
                 throw new \Exception("Insufficient funds in the cash account.");
             }
 
-            // 1. Pull the cash OUT of the drawer
-            $cashAccount->decrement('balance', $amount);
-            if ($cashAccount->capital_pool >= $amount) {
-                $cashAccount->decrement('capital_pool', $amount);
+            // 1. Pull cash OUT
+            $cashAccount->decrement('balance', $paymentAmount);
+            if ($cashAccount->capital_pool >= $paymentAmount) {
+                $cashAccount->decrement('capital_pool', $paymentAmount);
             } else {
-                $remaining = $amount - $cashAccount->capital_pool;
+                $remaining = $paymentAmount - $cashAccount->capital_pool;
                 $cashAccount->update(['capital_pool' => 0]);
                 $cashAccount->decrement('profit_pool', $remaining);
             }
@@ -147,28 +139,32 @@ class PurchaseService
             Transaction::create([
                 'account_id'       => $cashAccount->id,
                 'type'             => 'out',
-                'amount'           => $amount,
+                'amount'           => $paymentAmount,
                 'description'      => "Payment sent for Purchase Order #{$order->id}",
                 'reference_type'   => PurchaseOrder::class,
                 'reference_id'     => $order->id,
                 'transaction_date' => now(),
             ]);
 
-            // 2. Reduce the Debt (Accounts Payable)
-            $payableAccount->decrement('balance', $amount);
+            // 2. Reduce the Debt
+            $payableAccount->decrement('balance', $paymentAmount);
 
             Transaction::create([
                 'account_id'       => $payableAccount->id,
-                'type'             => 'out', // 'out' clears a liability balance
-                'amount'           => $amount,
-                'description'      => "Debt Cleared for Purchase Order #{$order->id}",
+                'type'             => 'out',
+                'amount'           => $paymentAmount,
+                'description'      => "Debt Partial/Full Clear for Purchase Order #{$order->id}",
                 'reference_type'   => PurchaseOrder::class,
                 'reference_id'     => $order->id,
                 'transaction_date' => now(),
             ]);
 
-            // Update the PO so it reflects the drawer it was finally paid from
-            $order->update(['account_id' => $cashAccount->id]);
+            // 3. Update the Order's Paid Status
+            $newAmountPaid = $order->amount_paid + $paymentAmount;
+            $order->update([
+                'amount_paid' => $newAmountPaid,
+                'payment_status' => $newAmountPaid >= $order->total_amount ? 'paid' : 'partial',
+            ]);
         });
     }
 }

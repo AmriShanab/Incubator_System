@@ -55,6 +55,9 @@ class PurchaseOrderResource extends Resource
                                 Forms\Components\Repeater::make('items')
                                     ->relationship()
                                     ->schema([
+                                        // THE FIX: Hidden tracker to check if dropdown ACTUALLY changed
+                                        Forms\Components\Hidden::make('item_tracker'),
+
                                         Forms\Components\MorphToSelect::make('purchasable')
                                             ->label('Item to Purchase')
                                             ->types([
@@ -70,12 +73,22 @@ class PurchaseOrderResource extends Resource
                                             ->required()
                                             ->live()
                                             ->afterStateUpdated(function ($state, Forms\Set $set, Forms\Get $get) {
+                                                
+                                                $currentTracker = ($state['purchasable_type'] ?? '') . '_' . ($state['purchasable_id'] ?? '');
+
+                                                // If the tracker hasn't changed, this is just a background re-render. Do nothing!
+                                                if ($get('item_tracker') === $currentTracker) {
+                                                    return;
+                                                }
+
+                                                // If it HAS changed, update the tracker and fetch the DB price
+                                                $set('item_tracker', $currentTracker);
+
                                                 if ($state['purchasable_type'] && $state['purchasable_id']) {
                                                     $modelClass = $state['purchasable_type'];
                                                     $record = $modelClass::find($state['purchasable_id']);
 
                                                     if ($record) {
-                                                        // Pulls cost from either Material or Accessory
                                                         $cost = $record->cost_per_unit ?? $record->cost_price ?? $record->cost ?? 0;
                                                         
                                                         $set('unit_cost', $cost);
@@ -198,20 +211,30 @@ class PurchaseOrderResource extends Resource
                         default => 'gray',
                     }),
 
-                Tables\Columns\TextColumn::make('account.name')
-                    ->label('Paid Via')
+                Tables\Columns\TextColumn::make('payment_status')
+                    ->label('Payment')
                     ->badge()
-                    ->color(fn(PurchaseOrder $record) => $record->account?->type === 'credit_payable' ? 'danger' : 'info')
-                    ->formatStateUsing(fn(string $state, PurchaseOrder $record) => $record->account?->type === 'credit_payable' ? 'Unpaid (Credit)' : $state)
-                    ->sortable(),
+                    ->color(fn(string $state): string => match ($state) {
+                        'paid' => 'success',
+                        'partial' => 'warning',
+                        'credit' => 'danger',
+                        default => 'gray',
+                    }),
 
                 Tables\Columns\TextColumn::make('total_amount')
                     ->label('Total')
                     ->money('LKR')
                     ->sortable()
                     ->weight('bold')
-                    ->alignEnd()
-                    ->summarize(Tables\Columns\Summarizers\Sum::make()->money('LKR')),
+                    ->alignEnd(),
+
+                // Displaying the balance remaining
+                Tables\Columns\TextColumn::make('balance_due')
+                    ->label('Balance Due')
+                    ->state(fn(PurchaseOrder $record) => $record->total_amount - $record->amount_paid)
+                    ->money('LKR')
+                    ->color('danger')
+                    ->alignEnd(),
             ])
             ->defaultSort('created_at', 'desc')
             ->actions([
@@ -235,27 +258,42 @@ class PurchaseOrderResource extends Resource
                         }
                     }),
 
+                // PARTIAL PAYMENTS ACTION
                 Tables\Actions\Action::make('settle_debt')
-                    ->label('Settle Debt')
+                    ->label('Pay Debt')
                     ->icon('heroicon-m-banknotes')
                     ->color('danger')
-                    ->visible(fn(PurchaseOrder $record) => $record->account && $record->account->type === 'credit_payable')
+                    ->visible(fn(PurchaseOrder $record) => 
+                        $record->account && 
+                        $record->account->type === 'credit_payable' && 
+                        $record->payment_status !== 'paid' && 
+                        $record->status === 'received' // Can only pay for received goods
+                    )
                     ->form([
                         Forms\Components\Select::make('payment_account_id')
-                            ->label('Pay From')
+                            ->label('Pay From Drawer/Bank')
                             ->options(function () {
                                 return \App\Models\Account::whereIn('type', ['cash', 'bank'])
                                     ->pluck('name', 'id');
                             })
                             ->required()
                             ->native(false),
+
+                        Forms\Components\TextInput::make('payment_amount')
+                            ->label('Amount to Pay')
+                            ->numeric()
+                            ->required()
+                            ->prefix('LKR')
+                            ->default(fn(PurchaseOrder $record) => $record->total_amount - $record->amount_paid)
+                            ->maxValue(fn(PurchaseOrder $record) => $record->total_amount - $record->amount_paid)
+                            ->helperText(fn(PurchaseOrder $record) => 'Balance Due: LKR ' . number_format($record->total_amount - $record->amount_paid, 2)),
                     ])
                     ->action(function (array $data, PurchaseOrder $record, \App\Services\PurchaseService $service) {
                         try {
-                            $service->settleCreditOrder($record, (int) $data['payment_account_id']);
-                            Notification::make()->title('Debt Settled Successfully')->success()->send();
+                            $service->settleCreditOrder($record, (int) $data['payment_account_id'], (float) $data['payment_amount']);
+                            Notification::make()->title('Payment Processed Successfully')->success()->send();
                         } catch (\Exception $e) {
-                            Notification::make()->title('Settlement Failed')->body($e->getMessage())->danger()->send();
+                            Notification::make()->title('Payment Failed')->body($e->getMessage())->danger()->send();
                         }
                     }),
             ]);

@@ -25,12 +25,8 @@ class MaterialResource extends Resource
         return in_array(\Illuminate\Support\Facades\Auth::user()?->role, ['admin', 'inventory']);
     }
 
-    /**
-     * Premium Feature: Sidebar Badge for Low Materials
-     */
     public static function getNavigationBadge(): ?string
     {
-        // Warns you if any material drops to 10 or below
         $lowStockCount = static::getModel()::where('current_stock', '<=', 10)->count();
         return $lowStockCount > 0 ? (string) $lowStockCount : null;
     }
@@ -67,7 +63,7 @@ class MaterialResource extends Resource
                                     ])
                                     ->required()
                                     ->default('pcs')
-                                    ->native(false) // Gives it the modern Filament dropdown look
+                                    ->native(false)
                                     ->columnSpanFull(),
                             ]),
                     ])->columnSpan(['lg' => 2]),
@@ -77,7 +73,7 @@ class MaterialResource extends Resource
                         Forms\Components\Section::make('Valuation & Stock')
                             ->schema([
                                 Forms\Components\TextInput::make('cost_per_unit')
-                                    ->label('Cost Per Unit')
+                                    ->label('Cost Per Unit (Updates automatically via PO)')
                                     ->numeric()
                                     ->prefix('LKR')
                                     ->required()
@@ -87,7 +83,7 @@ class MaterialResource extends Resource
                                     ->label('Live Stock Level')
                                     ->numeric()
                                     ->default(0)
-                                    ->disabledOn('edit') // Enforces ledger integrity
+                                    ->disabledOn('edit')
                                     ->helperText('Updated automatically via Purchase Orders and Production Logs.'),
                             ]),
                     ])->columnSpan(['lg' => 1]),
@@ -102,13 +98,13 @@ class MaterialResource extends Resource
                     ->searchable()
                     ->sortable()
                     ->weight('bold')
-                    // Shows the measurement unit cleanly under the name
                     ->description(fn (Material $record): string => 'Sold/Used in: ' . strtoupper($record->unit)),
 
                 Tables\Columns\TextColumn::make('cost_per_unit')
                     ->label('Unit Cost')
                     ->money('LKR')
                     ->sortable()
+                    ->color('primary')
                     ->alignEnd(),
 
                 Tables\Columns\TextColumn::make('current_stock')
@@ -117,20 +113,19 @@ class MaterialResource extends Resource
                     ->sortable()
                     ->badge()
                     ->color(fn (int $state): string => match (true) {
-                        $state <= 10 => 'danger',   // Red if critically low
-                        $state <= 25 => 'warning',  // Orange if getting low
-                        default => 'success',       // Green if healthy
+                        $state <= 10 => 'danger',
+                        $state <= 25 => 'warning',
+                        default => 'success',
                     })
                     ->alignEnd(),
 
-                // Premium computed column: Total Asset Value
                 Tables\Columns\TextColumn::make('asset_value')
                     ->label('Total Asset Value')
                     ->state(fn (Material $record): float => (float) ($record->cost_per_unit * $record->current_stock))
                     ->money('LKR')
                     ->sortable()
                     ->weight('bold')
-                    ->color('primary')
+                    ->color('gray')
                     ->alignEnd(),
             ])
             ->defaultSort('name', 'asc')
@@ -149,9 +144,7 @@ class MaterialResource extends Resource
 
     public static function getRelations(): array
     {
-        return [
-            //
-        ];
+        return [];
     }
 
     public static function getPages(): array

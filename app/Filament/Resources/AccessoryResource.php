@@ -57,7 +57,6 @@ class AccessoryResource extends Resource
                                     ->placeholder('e.g., Vitamin C Drops')
                                     ->columnSpanFull(),
 
-                                // THIS BELONGS IN THE FORM! 
                                 Forms\Components\TextInput::make('category')
                                     ->required()
                                     ->label('Category')
@@ -75,13 +74,13 @@ class AccessoryResource extends Resource
                                     ->required()
                                     ->numeric()
                                     ->prefix('LKR')
-                                    ->label('Buying Price (Cost)'),
+                                    ->label('Buying Price (Updates automatically via PO)'),
 
                                 Forms\Components\TextInput::make('selling_price')
                                     ->required()
                                     ->numeric()
                                     ->prefix('LKR')
-                                    ->label('Selling Price'),
+                                    ->label('Customer Selling Price'),
 
                                 Forms\Components\Select::make('uom')
                                     ->label('Unit of Measure')
@@ -104,8 +103,6 @@ class AccessoryResource extends Resource
                                     ->label('Live Stock')
                                     ->disabledOn('edit')
                                     ->helperText('Updated via sales & purchases.'),
-
-
 
                                 Forms\Components\TextInput::make('min_stock_alert')
                                     ->label('Low Stock Alert Level')
@@ -158,10 +155,9 @@ class AccessoryResource extends Resource
 
                 Tables\Columns\TextColumn::make('current_stock')
                     ->label('Available')
-                    ->numeric(decimalPlaces: 2) // Show up to 2 decimal places
+                    ->numeric(decimalPlaces: 2)
                     ->sortable()
                     ->badge()
-                    // Add the UOM to the end of the number!
                     ->formatStateUsing(fn($state, Accessory $record): string => $state . ' ' . ($record->uom ?? 'pcs'))
                     ->color(fn(int|float $state, Accessory $record): string => match (true) {
                         $state <= (float) ($record->min_stock_alert ?? 5) => 'danger',

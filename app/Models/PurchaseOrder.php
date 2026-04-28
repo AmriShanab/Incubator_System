@@ -12,7 +12,9 @@ class PurchaseOrder extends Model
         'account_id',
         'order_date',
         'status',
-        'total_amount'
+        'total_amount',
+        'amount_paid',
+        'payment_status',
     ];
 
     public function items()
